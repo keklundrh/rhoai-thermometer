@@ -17,7 +17,7 @@ IMGS_DIR=data/images
 SUMM_DIR=data/summary
 VEX_DIR=data/vex
 TMP_DIR=/tmp/
-JOBS=8
+JOBS=4
 VER="$2"
 [[ "$VER" == *.0 ]] && VER="${VER%.0}"
 
@@ -37,6 +37,8 @@ fi
 # create reference file to join later, or pass args to jq to print on each line
 # GHSA has published date in the local json file, don't need to hit RH VEX DATA since RH doesn't always have CVEs mapped to GHSA
 # need to make it clear the cve counter looks at CVEs on release date 
+# add parallel scanning back to the script
+
 
 fn_generate_sbom () {
     local IMAGE=$1
@@ -103,16 +105,45 @@ fn_cve_summary () {
 }
 
 echo "CLEAN ENVIRONMENT: $TMP_DIR"
-rm $TMP_DIR/*.tsv $TMP_DIR/*.dat
+rm $TMP_DIR/*.tsv $TMP_DIR/*.dat 2>/dev/null
 
-echo "GET IMAGES: rhoai $2 images on OCP $1" 
-CATALOG=$(podman run --rm -it --entrypoint bash registry.redhat.io/redhat/redhat-operator-index:v$1 -c 'cat /configs/rhods-operator/catalog.json')
+echo "GET IMAGES: rhoai $2 images on OCP $1"
+
+# Fetch the catalog with error handling
+CATALOG=$(podman run --rm --entrypoint bash registry.redhat.io/redhat/redhat-operator-index:v$1 -c 'cat /configs/rhods-operator/catalog.json' 2>&1)
+CATALOG_EXIT=$?
+
+# Check if podman command failed
+if [ $CATALOG_EXIT -ne 0 ]; then
+    echo "ERROR: Failed to fetch operator catalog for OCP $1"
+    echo "$CATALOG" | grep -i error
+    exit 1
+fi
+
+# Check if catalog is valid JSON
+if ! echo "$CATALOG" | tr -d '\000-\037' | jq empty 2>/dev/null; then
+    echo "ERROR: Invalid catalog data received from OCP $1"
+    exit 1
+fi
+
+# Extract bundle images
 BUNDLE=$(echo $CATALOG | tr -d '\000-\037' | jq -r '
-    select( .schema=="olm.bundle" ) 
-    | select( .name=="rhods-operator.'${RHOAI_VERSION:-$2}'" ) 
-    | .relatedImages[] 
+    select( .schema=="olm.bundle" )
+    | select( .name=="rhods-operator.'${RHOAI_VERSION:-$2}'" )
+    | .relatedImages[]
     | if .name == "" then "olm_bundle: " + .image else .name + ": " + .image end
     ' | cut -f 2 -w)
+
+# Check if any bundle images were found
+if [ -z "$BUNDLE" ]; then
+    echo "ERROR: No bundle found for rhods-operator.$2 in OCP $1 catalog"
+    echo ""
+    echo "Available versions in this catalog:"
+    echo "$CATALOG" | tr -d '\000-\037' | jq -r 'select(.schema=="olm.bundle") | .name' | grep "^rhods-operator\." | sort -V | tail -10
+    echo ""
+    echo "Hint: RHOAI 3.x requires OCP 4.20 or later"
+    exit 1
+fi
 
 cd $RDIH_DIR
 echo "UPDATE: disconnected install helper repo"
@@ -133,9 +164,8 @@ echo $BUNDLE $IMAGES | tr -s '[:space:]' '\n' > $RELS_DIR/rhoai-$2.txt
 cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do #xargs -n 1 -P $JOBS bash -c '
     fn_generate_sbom $IMAGE $IMGS_DIR
     fn_scan_sbom $IMAGE $IMGS_DIR
-#' -
+# ' -
 done
-
 
 cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do 
     
@@ -196,6 +226,6 @@ done
 
 mkdir -p $SUMM_DIR
 FIRST_FILE=$(find . -type f -name "*$(date +%F).tsv" | sort | head -n 1)
-head -n 1 $FIRST_FILE > $SUMM_DIR/ocp-$1-rhoai-$2.tsv 
+head -n 1 $FIRST_FILE > $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv 
 find . -type f -name "*$(date +%F).tsv" -exec tail -q -n +2 {} + >> $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv
 
