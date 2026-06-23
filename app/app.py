@@ -1,0 +1,237 @@
+"""RHOAI Thermometer - CVE Security Dashboard
+
+A Streamlit dashboard for analyzing CVE vulnerabilities in RHOAI container images.
+"""
+
+import streamlit as st
+from data_loader import get_available_releases, load_release_data, compute_release_metrics, get_time_series_data
+from utils import create_box_plot, create_severity_chart, create_time_series_chart, create_fix_timeline_chart
+
+
+# Page configuration
+st.set_page_config(
+    page_title="RHOAI Thermometer",
+    page_icon="🌡️",
+    layout="wide"
+)
+
+# Title
+st.title("🌡️ RHOAI Thermometer - CVE Dashboard")
+st.markdown("Security vulnerability analysis for Red Hat OpenShift AI releases")
+
+# Sidebar - View selector
+view = st.sidebar.radio(
+    "Select View",
+    ["Release View", "Time Series View"],
+    help="Choose between single release analysis or trends over time"
+)
+
+# Load available releases
+releases = get_available_releases()
+
+if not releases:
+    st.error("No RELEASE.tsv files found in data/summary/")
+    st.stop()
+
+
+# ===== RELEASE VIEW =====
+if view == "Release View":
+    st.header("Release Analysis")
+
+    # Release selector
+    release_options = {f"RHOAI {rhoai} (OCP {ocp})": (rhoai, ocp, path)
+                      for rhoai, ocp, path in releases}
+
+    selected = st.selectbox(
+        "Select RHOAI Release",
+        options=list(release_options.keys()),
+        help="Choose a RHOAI release to analyze"
+    )
+
+    rhoai_ver, ocp_ver, filepath = release_options[selected]
+
+    # Load data
+    with st.spinner(f"Loading data for RHOAI {rhoai_ver}..."):
+        df = load_release_data(filepath)
+        metrics = compute_release_metrics(df)
+
+    # Display metrics
+    st.subheader("Summary Metrics")
+
+    # Row 1: Count metrics
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric(
+            label="Total CVEs at Release",
+            value=f"{metrics['total_cves']:,}",
+            help="High/critical CVEs discovered at or before RHOAI release (DISCOVERY_DATE <= RELEASE_DATE). Excludes NO-RH-VEX entries."
+        )
+
+    with col2:
+        st.metric(
+            label="Unique CVEs",
+            value=f"{metrics['unique_cves']:,}",
+            help="Number of distinct CVE IDs (same CVE may appear in multiple containers)"
+        )
+
+    with col3:
+        st.metric(
+            label="Total Containers",
+            value=f"{metrics['total_containers']:,}",
+            help="Number of unique container images scanned"
+        )
+
+    with col4:
+        st.metric(
+            label="Avg CVEs per Container",
+            value=f"{metrics['avg_cves_per_container']:.1f}",
+            help="Mean number of CVEs across all containers"
+        )
+
+    # Row 2: Fix status metrics AT RELEASE TIME
+    st.subheader("Fix Availability at Release")
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            label="% CVEs with No Fix at Release",
+            value=f"{metrics['pct_no_fix']:.1f}%",
+            help="CVEs where no fix existed at RHOAI release date (FIX_DATE > RELEASE_DATE or NO-RH-VEX)"
+        )
+        st.progress(metrics['pct_no_fix'] / 100)
+
+    with col2:
+        st.metric(
+            label="% CVEs with Fix at Release",
+            value=f"{metrics['pct_with_fix']:.1f}%",
+            help="CVEs where a fix already existed at RHOAI release date (FIX_DATE < RELEASE_DATE)"
+        )
+        st.progress(metrics['pct_with_fix'] / 100)
+
+    with col3:
+        st.write("")  # Empty column for spacing
+
+    # Charts
+    st.subheader("Distribution Analysis")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Box plot
+        if len(metrics['cves_per_container_dist']) > 0:
+            fig_box = create_box_plot(metrics['cves_per_container_dist'])
+            st.plotly_chart(fig_box, use_container_width=True)
+        else:
+            st.warning("No data available for box plot")
+
+    with col2:
+        # Severity chart
+        if metrics['severity_counts']:
+            fig_severity = create_severity_chart(metrics['severity_counts'])
+            st.plotly_chart(fig_severity, use_container_width=True)
+        else:
+            st.warning("No severity data available")
+
+    # Top Containers by CVE Count
+    st.subheader("Top 5 Containers by CVE Count")
+
+    if not metrics['top_containers'].empty:
+        st.dataframe(
+            metrics['top_containers'],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Container Image": st.column_config.TextColumn(
+                    "Container Image",
+                    width="large"
+                ),
+                "CVE Count": st.column_config.NumberColumn(
+                    "CVE Count",
+                    format="%d"
+                )
+            }
+        )
+    else:
+        st.warning("No container data available")
+
+    # Additional info
+    with st.expander("📊 View Raw Data"):
+        st.dataframe(df, use_container_width=True)
+
+
+# ===== TIME SERIES VIEW =====
+else:
+    st.header("Time Series Analysis")
+
+    # Metric selector
+    metric_options = {
+        "Total CVEs": "total_cves",
+        "Unique CVEs": "unique_cves",
+        "Total Containers": "total_containers",
+        "Average CVEs per Container": "avg_cves_per_container",
+        "% CVEs with No Fix": "pct_no_fix",
+        "% CVEs with Fix": "pct_with_fix"
+    }
+
+    selected_metric_label = st.selectbox(
+        "Select Metric to Plot",
+        options=list(metric_options.keys()),
+        help="Choose which metric to visualize over time"
+    )
+
+    metric_col = metric_options[selected_metric_label]
+
+    # Load time series data
+    with st.spinner("Loading time series data..."):
+        ts_data = get_time_series_data()
+
+    if ts_data.empty:
+        st.error("No time series data available")
+        st.stop()
+
+    # Calculate consistent Y-axis ranges for percentage metrics only
+    # Numeric metrics use automatic scaling due to large magnitude differences
+    percentage_metrics = ['pct_no_fix', 'pct_with_fix']
+
+    if metric_col in percentage_metrics:
+        # Get min/max across all percentage metrics for consistent axis
+        y_min = ts_data[percentage_metrics].min().min()
+        y_max = ts_data[percentage_metrics].max().max()
+    else:
+        # Numeric metrics use automatic Y-axis
+        y_min = None
+        y_max = None
+
+    # Display chart
+    fig = create_time_series_chart(ts_data, metric_col, selected_metric_label, y_min, y_max)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Show data table
+    with st.expander("📊 View Time Series Data"):
+        st.dataframe(ts_data, use_container_width=True)
+
+    # Summary statistics
+    st.subheader("Summary Statistics")
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Min", f"{ts_data[metric_col].min():.2f}")
+
+    with col2:
+        st.metric("Max", f"{ts_data[metric_col].max():.2f}")
+
+    with col3:
+        st.metric("Mean", f"{ts_data[metric_col].mean():.2f}")
+
+    with col4:
+        st.metric("Latest", f"{ts_data[metric_col].iloc[-1]:.2f}")
+
+
+# Footer
+st.sidebar.markdown("---")
+st.sidebar.info(
+    "**RHOAI Thermometer**\n\n"
+    f"Analyzing {len(releases)} RHOAI releases\n\n"
+    "Data auto-refreshes every 5 minutes"
+)

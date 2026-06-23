@@ -1,0 +1,159 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+RHOAI Thermometer is a security analytics tool that scans Red Hat OpenShift AI (RHOAI) container images for CVE vulnerabilities. It generates time-series vulnerability data by scanning images from specific RHOAI releases as they existed at release time, enabling trend analysis and security posture tracking.
+
+## Prerequisites
+
+Before first run:
+1. Clone the helper repo in project root: `git clone https://github.com/red-hat-data-services/rhoai-disconnected-install-helper.git`
+2. Install dependencies: `grype`, `syft`, `jq`, `git`, `podman`, `gh` (GitHub CLI)
+
+## Running Scans
+
+Main script: `./rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION> [today|release]`
+
+Examples:
+- `./rh-summarize.sh 4.18 2.19.0` — scan RHOAI 2.19.0 on OCP 4.18 using CVEs as of release date
+- `./rh-summarize.sh 4.18 2.19.0 today` — scan same version using today's CVE database
+
+The script:
+1. Fetches image list from Red Hat operator catalog for the specified OCP version
+2. Retrieves the historical RHOAI image manifest from the disconnected-install-helper repo at the release date
+3. Generates SBOMs for each container image using Syft
+4. Scans SBOMs with Grype for vulnerabilities
+5. Enriches CVE data with Red Hat VEX metadata and GitHub Security Advisories
+6. Outputs consolidated TSV files in `data/summary/`
+
+## Data Architecture
+
+### Directory Structure
+
+```
+data/
+  releases/
+    <ocp-version>/
+      rhoai-<version>.txt          # List of image references for a release
+    rhoai-dates.csv                 # Release date mapping (release,GA-date)
+  images/
+    <image-name>/
+      sboms/
+        <sha256>.syft.json          # SBOM for specific image digest
+      scans/
+        <sha256>.grype.<date>.json  # Raw Grype scan output
+        <sha256>.grype.<date>.tsv   # Processed CVE summary with metadata
+  summary/
+    ocp-<ocp>-rhoai-<ver>-RELEASE.tsv    # Release-date CVE snapshot
+    ocp-<ocp>-rhoai-<ver>-CVEs-TODAY.tsv # Current CVE snapshot
+  vex/
+    <year>/
+      <cve-id>.json                 # Red Hat VEX data
+    GHSA/
+      <ghsa-id>.json                # GitHub Security Advisory data
+```
+
+### TSV Schema
+
+Summary TSV files contain these columns (tab-separated):
+1. `id` — CVE or GHSA identifier
+2. `severity` — Low/Medium/High/Critical
+3. `base-score` — CVSS base score from Grype
+4. `package` — Affected package name
+5. `version` — Installed package version
+6. `fix-version` — Version with fix (or "None")
+7. `location` — File path(s) in container
+8. `rel-base-score` — Related vulnerability CVSS score
+9. `container-build-date` — When the container was built
+10. `DISCOVERY_DATE` — When CVE was discovered (from RH VEX)
+11. `FIX_DATE` — When fix was available (from RH VEX)
+12. `RELEASE_DATE` — RHOAI release GA date
+13. `REPOSITORY` — Image registry (e.g., quay.io)
+14. `IMAGE` — Image name without tag/digest
+15. `SHA` — Image SHA256 digest
+
+Only CVEs with CVSS >= 8.0 (either base score or related score) are included in output.
+
+### Key Functions in rh-summarize.sh
+
+- `fn_generate_sbom()` — Creates Syft SBOM for an image if not cached
+- `fn_scan_sbom()` — Runs Grype scan on SBOM if not cached  
+- `fn_cve_summary()` — Filters scan results to high/critical CVEs and formats as TSV
+
+### Data Enrichment Flow
+
+For each CVE found:
+1. If GHSA identifier: fetch GitHub advisory to map to CVE-ID
+2. Fetch Red Hat VEX data from `https://security.access.redhat.com/data/csaf/v2/vex/<year>/<cve>.json`
+3. Extract discovery date and remediation date from VEX
+4. Cache all fetched data locally (30-day freshness check)
+
+### Historical Scanning
+
+The script uses `git show "$(git rev-list -n 1 --before="$SCAN_DATE" main)"` to retrieve the RHOAI image manifest as it existed at the release date. This enables scanning against the CVE database state at release time, not just current state.
+
+## Development Notes
+
+### Caching Strategy
+
+- SBOMs are generated once per image SHA and reused
+- Grype scans are dated (`<sha>.grype.<date>.json`) to allow rescanning with newer CVE databases
+- VEX data is cached with 30-day TTL
+- All data stored under `data/` for reuse across scans
+
+### OCP Version Requirements
+
+RHOAI 3.x requires OCP 4.20 or later. The script validates catalog availability and shows available versions on error.
+
+### Version Normalization
+
+Script strips trailing `.0` from versions (e.g., `2.19.0` → `2.19`) to match file naming in the disconnected-install-helper repo.
+
+### Parallel Execution
+
+The script currently runs sequentially (`while read` loop). Parallel scanning capability exists but is commented out (see TODO at line 37-40). Can be re-enabled with `xargs -n 1 -P $JOBS`.
+
+## Output Naming Convention
+
+- `RELEASE` suffix: CVEs as of the RHOAI GA date (from rhoai-dates.csv)
+- `CVEs-TODAY` suffix: CVEs as of script execution date
+
+This enables comparing "how many CVEs existed at launch" vs "how many exist now" for the same RHOAI version.
+
+## Frontend 
+
+This project contains a local web application that displays the following high-level content: 
+1. Summary data per release 
+2. Summary data over time 
+
+## User experience 
+
+Application defaults to releases view where the use can select which Release they care about from a table that shows the file name and basic meta data like file modified date. Upon selection they are presented with a dashboard below the table showing the summarized metrics: 
+* total CVEs in the release 
+* total containers 
+* average number of CVEs per container with a box plot showing the distribution of CVEs across containers within the release
+* percent of CVES with no fix (empty 'fix-version' column)
+* percent of CVEs with fix ('fix-version' column has entry)
+* percent of CVEs by 'severity' level
+
+The Summary data over time view will allows the user to see each of the summary data mapped over time. The user has the ability to select which time series metric they want displayed in the graph below.
+
+In both cases, the `data/summary` folder includes a release specific TSV summary. The file names are structured `ocp-${OPENSHIFT_VER}-rhoai-${RHOAI_VER}.tsv or `ocp-${OPENSHIFT_VER}-rhoai-${RHOAI_VER}-RELEASE.tsv. For the timeseries, you can ignore $OPENSHIFT_VER. Plot $RHOAI_VER in increasing numerical order where 2.22.0 is less than 3.2.0 which is less than 3.4.0. 
+
+## Summary of summarized files
+
+Data files exist in `data/summary` but they include a tsv file where each row is a CVE. The frontend uses a summary of these summaries files and is created using a python script. The python script auto-refreshes when the streamlit app loads to pull in any new data files in the `data/summary` folder and add the summary data to the file. 
+
+Default to \*-RELEASE.tsv files for historical comparison.
+
+If two scans were done on the same RHOAI version, the summary script only uses the $OPENSHIFT_VER that is greater.
+
+## Frontend technical specs 
+
+The frontend is a simple streamlit application.
+
+## The deployment model 
+
+Run locally using a simple command.

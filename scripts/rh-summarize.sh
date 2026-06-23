@@ -187,14 +187,21 @@ cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do
         if [[ "$CVE" == CVE* ]]; then 
 	        YEAR=$(echo $CVE | cut -d- -f2)
 	        CVE_LOW=$(printf '%s' "$CVE" | tr '[:upper:]' '[:lower:]')
-        else 
+        else
             mkdir -p $VEX_DIR/GHSA
-            if [ ! -s $VEX_DIR/GHSA/$CVE/$CVE.json ] || [ $(find $VEX_DIR/GHSA/$CVE.json -mtime +30 2>/dev/null) ]; then 
-                gh api https://api.github.com/advisories/$CVE > $VEX_DIR/GHSA/$CVE.json 
+            if [ ! -s $VEX_DIR/GHSA/$CVE.json ] || [ $(find $VEX_DIR/GHSA/$CVE.json -mtime +30 2>/dev/null) ]; then
+                if ! gh api https://api.github.com/advisories/$CVE > $VEX_DIR/GHSA/$CVE.json 2>/dev/null; then
+                    # GHSA not found, write placeholder
+                    echo '{"cve_id":"NO-GHSA","ghsa_id":"'$CVE'"}' > $VEX_DIR/GHSA/$CVE.json
+                fi
                 sleep 1
-            fi 
+            fi
 
-            CVE_TMP=$(cat $VEX_DIR/GHSA/$CVE.json | jq -r '.cve_id')
+            CVE_TMP=$(cat $VEX_DIR/GHSA/$CVE.json | jq -r '.cve_id // "NO-GHSA"')
+            if [ "$CVE_TMP" == "NO-GHSA" ] || [ "$CVE_TMP" == "null" ]; then
+                echo "NO-RH-VEX\tNO-RH-VEX"
+                continue
+            fi
             YEAR=$(echo $CVE_TMP | cut -d- -f2)
             CVE_LOW=$(printf '%s' $CVE_TMP | tr '[:upper:]' '[:lower:]')
         fi

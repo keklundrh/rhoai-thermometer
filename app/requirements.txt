@@ -1,0 +1,5 @@
+streamlit==1.42.0
+plotly==6.0.1
+packaging==24.2
+pandas==2.3.3
+numpy==2.3.5

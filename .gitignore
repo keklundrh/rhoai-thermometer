@@ -1,5 +1,34 @@
-.DS_Store
-rhoai-disconnected-install-helper
-.ipy*
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data files (large, generated)
+data/
+
+# IDE
+.vscode/
+.idea/
 *.swp
-data
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+
+# External dependencies
+rhoai-disconnected-install-helper/
