@@ -75,8 +75,8 @@ def load_release_data(filepath: str) -> pd.DataFrame:
         df = pd.read_csv(filepath, sep='\t', header=0,
                         keep_default_na=False, na_values=[''])
 
-        if len(df.columns) < 15:
-            st.warning(f"File has fewer than 15 columns: {filepath}")
+        if len(df.columns) < 14:
+            st.warning(f"File has fewer than 14 columns: {filepath}")
 
         return df
     except Exception as e:

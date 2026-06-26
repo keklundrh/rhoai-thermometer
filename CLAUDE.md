@@ -64,7 +64,6 @@ Summary TSV files contain these columns (tab-separated):
 4. `package` — Affected package name
 5. `version` — Installed package version
 6. `fix-version` — Version with fix (or "None")
-7. `location` — File path(s) in container
 8. `rel-base-score` — Related vulnerability CVSS score
 9. `container-build-date` — When the container was built
 10. `DISCOVERY_DATE` — When CVE was discovered (from RH VEX)
