@@ -127,18 +127,61 @@ This enables comparing "how many CVEs existed at launch" vs "how many exist now"
 This project contains a local web application that displays the following high-level content: 
 1. Summary data per release 
 2. Summary data over time 
+3. Documentation and data catalog
+
+The application has three views accessible via sidebar:
+- **Release View** - Detailed metrics for a single RHOAI release
+- **Time Series View** - Trends across multiple RHOAI releases
+- **Documentation** - Comprehensive guide to scanning process, metrics, and data schema
 
 ## User experience 
 
-Application defaults to releases view where the use can select which Release they care about from a table that shows the file name and basic meta data like file modified date. Upon selection they are presented with a dashboard below the table showing the summarized metrics: 
-* total CVEs in the release 
-* total containers 
-* average number of CVEs per container with a box plot showing the distribution of CVEs across containers within the release
-* percent of CVES with no fix (empty 'fix-version' column)
-* percent of CVEs with fix ('fix-version' column has entry)
-* percent of CVEs by 'severity' level
+### Release View
 
-The Summary data over time view will allows the user to see each of the summary data mapped over time. The user has the ability to select which time series metric they want displayed in the graph below.
+The user selects a RHOAI release and sees:
+
+**Summary Metrics:**
+* Total CVEs at Release - CVEs discovered before or on the RHOAI release date (excludes NO-RH-VEX)
+* Unique CVEs - Distinct CVE IDs (same CVE may appear in multiple containers)
+* Total Containers - Number of unique container images scanned
+* Average CVEs per Container - Mean CVE count across containers
+
+**Fix Availability:**
+* % CVEs with No Fix at Release
+* % CVEs with Fix at Release
+
+**Distribution Analysis:**
+* CVE Distribution box plot - Shows CVE count distribution across containers (Y-axis capped at 1.5×IQR for readability)
+* Severity chart - Breakdown by Critical/High/Medium/Low
+* Container Freshness histogram - Shows age of containers relative to RHOAI release date
+  - Positive values = containers built before release (older/stale)
+  - Negative values = containers built after release (newer)
+  - Calculated as: `RELEASE_DATE - container-build-date`
+
+**Top Containers:**
+* Table showing 5 containers with the most CVEs
+
+### Time Series View
+
+The user selects a metric to track across RHOAI releases:
+* Numeric metrics (Total CVEs, Unique CVEs, Total Containers, Avg CVEs per Container) - automatic Y-axis
+* Percentage metrics (% No Fix, % With Fix) - consistent Y-axis across both
+
+**Container Freshness (when selected from dropdown):**
+* Stacked bar chart showing container build dates binned by month
+* Each release color-coded, allowing comparison of container age patterns over time
+* Vertical dashed lines mark each RHOAI release date
+
+### Documentation View
+
+Displays comprehensive documentation loaded from `app/DOCUMENTATION.md`:
+* Scanning process and data collection pipeline
+* TSV data schema with all column definitions
+* Metric calculations and meanings for both Release and Time Series views
+* Data filtering rules
+* Glossary of terms
+
+The documentation is stored as Markdown for easy editing without code changes.
 
 In both cases, the `data/summary` folder includes a release specific TSV summary. The file names are structured `ocp-${OPENSHIFT_VER}-rhoai-${RHOAI_VER}.tsv or `ocp-${OPENSHIFT_VER}-rhoai-${RHOAI_VER}-RELEASE.tsv. For the timeseries, you can ignore $OPENSHIFT_VER. Plot $RHOAI_VER in increasing numerical order where 2.22.0 is less than 3.2.0 which is less than 3.4.0. 
 

@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import List, Tuple, Dict
 import pandas as pd
+import numpy as np
 import streamlit as st
 from utils import parse_filename, sort_versions
 
@@ -111,14 +112,18 @@ def compute_release_metrics(df: pd.DataFrame) -> Dict:
             'total_containers': 0,
             'avg_cves_per_container': 0,
             'cves_per_container_dist': [],
+            'dist_stats': {'count': 0, 'min': 0, 'q1': 0, 'median': 0, 'mean': 0, 'q3': 0, 'max': 0, 'iqr': 0, 'std': 0},
             'top_containers': pd.DataFrame(columns=['Container Image', 'CVE Count']),
+            'freshness_dist': [],
+            'freshness_dates': [],
             'pct_no_fix': 0,
             'pct_with_fix': 0,
             'severity_counts': {},
             'pct_fix_before_build': 0,
             'pct_fix_after_build': 0,
             'avg_days_to_fix': 0,
-            'fix_timeline_dist': []
+            'fix_timeline_dist': [],
+            'df_filtered': pd.DataFrame()
         }
 
     # FILTER: Only keep CVEs that existed at release time
@@ -141,14 +146,18 @@ def compute_release_metrics(df: pd.DataFrame) -> Dict:
             'total_containers': 0,
             'avg_cves_per_container': 0,
             'cves_per_container_dist': [],
+            'dist_stats': {'count': 0, 'min': 0, 'q1': 0, 'median': 0, 'mean': 0, 'q3': 0, 'max': 0, 'iqr': 0, 'std': 0},
             'top_containers': pd.DataFrame(columns=['Container Image', 'CVE Count']),
+            'freshness_dist': [],
+            'freshness_dates': [],
             'pct_no_fix': 0,
             'pct_with_fix': 0,
             'severity_counts': {},
             'pct_fix_before_build': 0,
             'pct_fix_after_build': 0,
             'avg_days_to_fix': 0,
-            'fix_timeline_dist': []
+            'fix_timeline_dist': [],
+            'df_filtered': pd.DataFrame()
         }
 
     # Total CVEs (after filtering)
@@ -160,14 +169,60 @@ def compute_release_metrics(df: pd.DataFrame) -> Dict:
     # Total unique containers (count unique SHAs from original df)
     total_containers = df['SHA'].nunique()
 
-    # CVEs per container (using filtered CVEs)
-    cves_per_container = df_filtered.groupby('IMAGE').size()
+    # CVEs per container (using filtered CVEs, grouped by SHA for consistency)
+    cves_per_container = df_filtered.groupby('SHA').size()
     avg_cves_per_container = cves_per_container.mean()
     cves_per_container_dist = cves_per_container.values
 
-    # Top 5 containers by CVE count
-    top_containers = cves_per_container.sort_values(ascending=False).head(5).reset_index()
-    top_containers.columns = ['Container Image', 'CVE Count']
+    # Calculate distribution statistics (unique containers by SHA that have CVEs)
+    if len(cves_per_container_dist) > 0:
+        dist_stats = {
+            'count': len(cves_per_container_dist),
+            'min': np.min(cves_per_container_dist),
+            'q1': np.percentile(cves_per_container_dist, 25),
+            'median': np.median(cves_per_container_dist),
+            'mean': np.mean(cves_per_container_dist),
+            'q3': np.percentile(cves_per_container_dist, 75),
+            'max': np.max(cves_per_container_dist),
+            'iqr': np.percentile(cves_per_container_dist, 75) - np.percentile(cves_per_container_dist, 25),
+            'std': np.std(cves_per_container_dist)
+        }
+    else:
+        dist_stats = {
+            'count': 0,
+            'min': 0,
+            'q1': 0,
+            'median': 0,
+            'mean': 0,
+            'q3': 0,
+            'max': 0,
+            'iqr': 0,
+            'std': 0
+        }
+
+    # Top 5 containers by CVE count (using SHA, then get the IMAGE name for display)
+    top_shas = cves_per_container.sort_values(ascending=False).head(5)
+
+    # Map SHAs to IMAGE names for display
+    sha_to_image = df_filtered.groupby('SHA')['IMAGE'].first()
+    top_containers = pd.DataFrame({
+        'Container Image': top_shas.index.map(sha_to_image),
+        'CVE Count': top_shas.values
+    })
+
+    # Container Freshness Analysis
+    # Calculate days between container build and RHOAI release
+    df_freshness = df[df['container-build-date'] != 'W'].copy()
+    df_freshness['container-build-date_dt'] = pd.to_datetime(df_freshness['container-build-date'], errors='coerce')
+    df_freshness['RELEASE_DATE_dt'] = pd.to_datetime(df_freshness['RELEASE_DATE'], errors='coerce')
+
+    # Freshness = container-build-date - RELEASE_DATE (negative = before release, positive = after release)
+    df_freshness['freshness_days'] = (df_freshness['container-build-date_dt'] - df_freshness['RELEASE_DATE_dt']).dt.days
+
+    # Get unique containers with their freshness (one entry per SHA)
+    freshness_per_container = df_freshness.groupby('SHA')[['freshness_days', 'container-build-date_dt']].first().dropna()
+    freshness_dist = freshness_per_container['freshness_days'].values
+    freshness_dates = freshness_per_container['container-build-date_dt'].values
 
     # Fix status AT RELEASE TIME
     # NO fix at release = (FIX_DATE > RELEASE_DATE) OR (FIX_DATE == 'NO-RH-VEX')
@@ -186,8 +241,9 @@ def compute_release_metrics(df: pd.DataFrame) -> Dict:
     pct_no_fix = (no_fix_count / total_cves * 100) if total_cves > 0 else 0
     pct_with_fix = 100 - pct_no_fix
 
-    # Severity distribution (from filtered data)
-    severity_counts = df_filtered['severity'].value_counts().to_dict()
+    # Severity distribution (from filtered data, UNIQUE CVEs only)
+    # Drop duplicates by CVE ID to count each unique CVE once
+    severity_counts = df_filtered.drop_duplicates(subset='id')['severity'].value_counts().to_dict()
 
     # Fix timeline analysis (relative to RELEASE_DATE, not container build date)
     # Use filtered data
@@ -223,14 +279,18 @@ def compute_release_metrics(df: pd.DataFrame) -> Dict:
         'total_containers': total_containers,
         'avg_cves_per_container': avg_cves_per_container,
         'cves_per_container_dist': cves_per_container_dist,
+        'dist_stats': dist_stats,
         'top_containers': top_containers,
+        'freshness_dist': freshness_dist,
+        'freshness_dates': freshness_dates,
         'pct_no_fix': pct_no_fix,
         'pct_with_fix': pct_with_fix,
         'severity_counts': severity_counts,
         'pct_fix_before_build': pct_fix_before_build,
         'pct_fix_after_build': pct_fix_after_build,
         'avg_days_to_fix': avg_days_to_fix,
-        'fix_timeline_dist': fix_timeline_dist
+        'fix_timeline_dist': fix_timeline_dist,
+        'df_filtered': df_filtered
     }
 
 
@@ -267,3 +327,83 @@ def get_time_series_data() -> pd.DataFrame:
         })
 
     return pd.DataFrame(data)
+
+
+@st.cache_data(ttl=300)
+def get_freshness_data_by_release() -> Tuple[Dict[str, pd.DataFrame], Dict[str, str]]:
+    """
+    Load freshness data for all releases, binned by month.
+
+    Returns:
+        Tuple of (freshness_data, release_dates)
+        - freshness_data: Dict mapping rhoai_version -> DataFrame with columns [month, count]
+        - release_dates: Dict mapping rhoai_version -> release_date string
+    """
+    import numpy as np
+
+    releases = get_available_releases()
+    freshness_data = {}
+    release_dates = {}
+
+    for rhoai_ver, ocp_ver, filepath in releases:
+        df = load_release_data(filepath)
+
+        # Calculate freshness for this release
+        df_freshness = df[df['container-build-date'] != 'W'].copy()
+        df_freshness['container-build-date_dt'] = pd.to_datetime(df_freshness['container-build-date'], errors='coerce')
+        df_freshness['RELEASE_DATE_dt'] = pd.to_datetime(df_freshness['RELEASE_DATE'], errors='coerce')
+
+        # Store release date
+        if not df_freshness.empty and df_freshness['RELEASE_DATE_dt'].notna().any():
+            release_dates[rhoai_ver] = df_freshness['RELEASE_DATE_dt'].iloc[0]
+
+        # Get unique containers with their build dates
+        unique_containers = df_freshness.groupby('SHA')['container-build-date_dt'].first().dropna()
+
+        if len(unique_containers) > 0:
+            # Convert to month/year for binning
+            monthly_data = unique_containers.dt.to_period('M').value_counts().sort_index()
+
+            # Convert to DataFrame
+            freshness_df = pd.DataFrame({
+                'month': monthly_data.index.to_timestamp(),
+                'count': monthly_data.values
+            })
+
+            freshness_data[rhoai_ver] = freshness_df
+
+    return freshness_data, release_dates
+
+
+@st.cache_data(ttl=300)
+def get_freshness_histogram_data() -> Dict[str, np.ndarray]:
+    """
+    Load freshness data for all releases as days (for histogram view).
+
+    Returns:
+        Dictionary mapping rhoai_version -> array of freshness days
+        Freshness = container-build-date - RELEASE_DATE
+    """
+    import numpy as np
+
+    releases = get_available_releases()
+    freshness_data = {}
+
+    for rhoai_ver, ocp_ver, filepath in releases:
+        df = load_release_data(filepath)
+
+        # Calculate freshness for this release
+        df_freshness = df[df['container-build-date'] != 'W'].copy()
+        df_freshness['container-build-date_dt'] = pd.to_datetime(df_freshness['container-build-date'], errors='coerce')
+        df_freshness['RELEASE_DATE_dt'] = pd.to_datetime(df_freshness['RELEASE_DATE'], errors='coerce')
+
+        # Calculate freshness in days (negative = before release)
+        df_freshness['freshness_days'] = (df_freshness['container-build-date_dt'] - df_freshness['RELEASE_DATE_dt']).dt.days
+
+        # Get unique containers with their freshness
+        unique_freshness = df_freshness.groupby('SHA')['freshness_days'].first().dropna()
+
+        if len(unique_freshness) > 0:
+            freshness_data[rhoai_ver] = unique_freshness.values
+
+    return freshness_data

@@ -132,8 +132,8 @@ def create_severity_chart(severity_counts: dict) -> go.Figure:
     ))
 
     fig.update_layout(
-        title="CVEs by Severity",
-        xaxis_title="Number of CVEs",
+        title="Unique CVEs by Severity",
+        xaxis_title="Number of Unique CVEs",
         yaxis_title="Severity",
         height=300,
         yaxis={'categoryorder': 'array', 'categoryarray': severity_order}
@@ -183,6 +183,217 @@ def create_time_series_chart(df, metric_col: str, metric_label: str, y_min: floa
         layout_config['yaxis'] = dict(range=[max(0, y_min - margin), y_max + margin])
 
     fig.update_layout(**layout_config)
+
+    return fig
+
+
+def create_freshness_chart(data: np.ndarray, dates: np.ndarray, release_date: str, title: str = "Container Freshness Distribution") -> go.Figure:
+    """
+    Create a histogram showing container freshness (days between build and RHOAI release).
+    Negative values = container built before release (left side)
+    Positive values = container built after release (right side)
+
+    Args:
+        data: Array of freshness in days (container-build-date - RELEASE_DATE)
+        dates: Array of container build dates (datetime64)
+        release_date: RHOAI release date string
+        title: Plot title
+
+    Returns:
+        Plotly Figure object
+    """
+    import pandas as pd
+
+    # Create DataFrame for easier binning
+    df = pd.DataFrame({
+        'days': data,
+        'date': pd.to_datetime(dates)
+    })
+
+    # Bin the data manually to get min/max dates per bin
+    bins = np.histogram_bin_edges(data, bins=50)
+    df['bin'] = pd.cut(df['days'], bins=bins, include_lowest=True)
+
+    # Group by bin and get stats
+    binned = df.groupby('bin', observed=True).agg({
+        'days': 'count',
+        'date': ['min', 'max']
+    }).reset_index()
+
+    # Flatten column names
+    binned.columns = ['bin', 'count', 'date_min', 'date_max']
+
+    # Get bin centers for x-axis
+    binned['bin_center'] = binned['bin'].apply(lambda x: x.mid)
+
+    # Filter out empty bins
+    binned = binned[binned['count'] > 0]
+
+    # Create custom hover text
+    hover_text = []
+    for _, row in binned.iterrows():
+        date_range = f"{row['date_min'].strftime('%Y-%m-%d')} to {row['date_max'].strftime('%Y-%m-%d')}"
+        hover_text.append(
+            f"Days from release: {row['bin_center']:.0f}<br>"
+            f"Container count: {row['count']}<br>"
+            f"Build date range: {date_range}"
+        )
+
+    fig = go.Figure()
+
+    # Create bar chart (looks like histogram)
+    fig.add_trace(go.Bar(
+        x=binned['bin_center'],
+        y=binned['count'],
+        width=np.diff(bins).mean(),  # Uniform bar width
+        marker_color='#2ca02c',  # Green color
+        marker_line_color='white',
+        marker_line_width=1,
+        hovertext=hover_text,
+        hoverinfo='text'
+    ))
+
+    # Add vertical line at x=0 (RHOAI release date)
+    fig.add_vline(
+        x=0,
+        line_dash="dash",
+        line_color="red",
+        annotation_text=f"RHOAI Released ({release_date})",
+        annotation_position="top"
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Days from Release (negative = built before, positive = built after)",
+        yaxis_title="Number of Containers",
+        height=400,
+        showlegend=False
+    )
+
+    return fig
+
+
+def create_freshness_stacked_chart(freshness_data_by_release: dict, release_dates: dict, title: str = "Container Build Dates Across Releases") -> go.Figure:
+    """
+    Create a stacked bar chart showing container build dates binned by month across multiple RHOAI releases.
+
+    Args:
+        freshness_data_by_release: Dict mapping release version -> DataFrame with [month, count]
+        release_dates: Dict mapping release version -> release date
+        title: Plot title
+
+    Returns:
+        Plotly Figure object
+    """
+    import plotly.express as px
+    import pandas as pd
+
+    fig = go.Figure()
+
+    # Color palette for different releases
+    colors = px.colors.qualitative.Plotly
+
+    # Add bar trace for each release
+    for idx, (release, df) in enumerate(freshness_data_by_release.items()):
+        if not df.empty:
+            fig.add_trace(go.Bar(
+                x=df['month'],
+                y=df['count'],
+                name=f"RHOAI {release}",
+                marker_color=colors[idx % len(colors)],
+                opacity=0.7,
+                hovertemplate=f'<b>RHOAI {release}</b><br>Month: %{{x|%Y-%m}}<br>Containers: %{{y}}<extra></extra>'
+            ))
+
+    # Add vertical lines for each RHOAI release date
+    for idx, (release, release_date) in enumerate(release_dates.items()):
+        fig.add_vline(
+            x=release_date,
+            line_dash="dash",
+            line_color=colors[idx % len(colors)],
+            annotation_text=f"RHOAI {release}",
+            annotation_position="top",
+            annotation_textangle=-90
+        )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Container Build Month",
+        yaxis_title="Number of Containers",
+        barmode='stack',
+        height=600,
+        hovermode='x unified',
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=0.01
+        ),
+        xaxis=dict(
+            tickformat='%Y-%m',
+            dtick='M3'  # Show tick every 3 months
+        )
+    )
+
+    return fig
+
+
+def create_freshness_histogram_stacked(freshness_data_by_release: dict, title: str = "Container Freshness Distribution") -> go.Figure:
+    """
+    Create a stacked histogram showing container freshness (days) across multiple RHOAI releases.
+    Negative values = built before release, Positive values = built after release.
+
+    Args:
+        freshness_data_by_release: Dict mapping release version -> array of freshness days
+        title: Plot title
+
+    Returns:
+        Plotly Figure object
+    """
+    import plotly.express as px
+
+    fig = go.Figure()
+
+    # Color palette for different releases
+    colors = px.colors.qualitative.Plotly
+
+    # Add histogram trace for each release
+    for idx, (release, data) in enumerate(freshness_data_by_release.items()):
+        if len(data) > 0:
+            fig.add_trace(go.Histogram(
+                x=data,
+                name=f"RHOAI {release}",
+                marker_color=colors[idx % len(colors)],
+                opacity=0.7,
+                nbinsx=50,
+                hovertemplate=f'<b>RHOAI {release}</b><br>Days from release: %{{x}}<br>Count: %{{y}}<extra></extra>'
+            ))
+
+    # Add vertical line at x=0 (release date)
+    fig.add_vline(
+        x=0,
+        line_dash="dash",
+        line_color="red",
+        annotation_text="Release Date",
+        annotation_position="top"
+    )
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Days from Release (negative = built before, positive = built after)",
+        yaxis_title="Number of Containers",
+        barmode='stack',
+        height=600,
+        hovermode='x unified',
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=0.01
+        )
+    )
 
     return fig
 

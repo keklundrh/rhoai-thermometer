@@ -4,8 +4,9 @@ A Streamlit dashboard for analyzing CVE vulnerabilities in RHOAI container image
 """
 
 import streamlit as st
-from data_loader import get_available_releases, load_release_data, compute_release_metrics, get_time_series_data
-from utils import create_box_plot, create_severity_chart, create_time_series_chart, create_fix_timeline_chart
+import pandas as pd
+from data_loader import get_available_releases, load_release_data, compute_release_metrics, get_time_series_data, get_freshness_data_by_release, get_freshness_histogram_data
+from utils import create_severity_chart, create_time_series_chart, create_freshness_chart, create_freshness_stacked_chart, create_freshness_histogram_stacked
 
 
 # Page configuration
@@ -22,8 +23,8 @@ st.markdown("Security vulnerability analysis for Red Hat OpenShift AI releases")
 # Sidebar - View selector
 view = st.sidebar.radio(
     "Select View",
-    ["Release View", "Time Series View"],
-    help="Choose between single release analysis or trends over time"
+    ["Release View", "Time Series View", "Documentation"],
+    help="Choose between single release analysis, trends over time, or documentation"
 )
 
 # Load available releases
@@ -118,12 +119,31 @@ if view == "Release View":
     col1, col2 = st.columns(2)
 
     with col1:
-        # Box plot
-        if len(metrics['cves_per_container_dist']) > 0:
-            fig_box = create_box_plot(metrics['cves_per_container_dist'])
-            st.plotly_chart(fig_box, use_container_width=True)
+        # CVE Distribution Statistics Table
+        st.markdown("**CVE Distribution Across Containers**")
+        if metrics['dist_stats']['count'] > 0:
+            stats_df = pd.DataFrame([
+                {"Statistic": "Containers with CVEs Count", "Value": f"{metrics['dist_stats']['count']:,}"},
+                {"Statistic": "Minimum", "Value": f"{metrics['dist_stats']['min']:.0f}"},
+                {"Statistic": "25th Percentile (Q1)", "Value": f"{metrics['dist_stats']['q1']:.1f}"},
+                {"Statistic": "Median", "Value": f"{metrics['dist_stats']['median']:.1f}"},
+                {"Statistic": "Mean", "Value": f"{metrics['dist_stats']['mean']:.1f}"},
+                {"Statistic": "75th Percentile (Q3)", "Value": f"{metrics['dist_stats']['q3']:.1f}"},
+                {"Statistic": "Maximum", "Value": f"{metrics['dist_stats']['max']:.0f}"},
+                {"Statistic": "IQR (Q3 - Q1)", "Value": f"{metrics['dist_stats']['iqr']:.1f}"},
+                {"Statistic": "Std Deviation", "Value": f"{metrics['dist_stats']['std']:.1f}"},
+            ])
+            st.dataframe(
+                stats_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Statistic": st.column_config.TextColumn("Statistic", width="medium"),
+                    "Value": st.column_config.TextColumn("CVEs per Container", width="medium")
+                }
+            )
         else:
-            st.warning("No data available for box plot")
+            st.warning("No distribution data available")
 
     with col2:
         # Severity chart
@@ -132,6 +152,19 @@ if view == "Release View":
             st.plotly_chart(fig_severity, use_container_width=True)
         else:
             st.warning("No severity data available")
+
+    # Freshness chart (full width)
+    if len(metrics['freshness_dist']) > 0:
+        # Get release date from the dataframe
+        release_date = df['RELEASE_DATE'].iloc[0] if not df.empty else "Unknown"
+        fig_freshness = create_freshness_chart(
+            metrics['freshness_dist'],
+            metrics['freshness_dates'],
+            release_date
+        )
+        st.plotly_chart(fig_freshness, use_container_width=True)
+    else:
+        st.warning("No freshness data available")
 
     # Top Containers by CVE Count
     st.subheader("Top 5 Containers by CVE Count")
@@ -156,22 +189,24 @@ if view == "Release View":
         st.warning("No container data available")
 
     # Additional info
-    with st.expander("📊 View Raw Data"):
-        st.dataframe(df, use_container_width=True)
+    with st.expander("📊 View Raw Data (CVEs discovered before or on release date)"):
+        st.dataframe(metrics['df_filtered'], use_container_width=True)
 
 
 # ===== TIME SERIES VIEW =====
-else:
+elif view == "Time Series View":
     st.header("Time Series Analysis")
 
     # Metric selector
     metric_options = {
-        "Total CVEs": "total_cves",
-        "Unique CVEs": "unique_cves",
+        "Total CVEs at release": "total_cves",
+        "Unique CVEs at release": "unique_cves",
         "Total Containers": "total_containers",
         "Average CVEs per Container": "avg_cves_per_container",
         "% CVEs with No Fix": "pct_no_fix",
-        "% CVEs with Fix": "pct_with_fix"
+        "% CVEs with Fix": "pct_with_fix",
+        "Container Freshness (View 1)": "freshness_monthly",
+        "Container Freshness (View 2)": "freshness_histogram"
     }
 
     selected_metric_label = st.selectbox(
@@ -203,29 +238,83 @@ else:
         y_min = None
         y_max = None
 
-    # Display chart
-    fig = create_time_series_chart(ts_data, metric_col, selected_metric_label, y_min, y_max)
-    st.plotly_chart(fig, use_container_width=True)
+    # Display chart based on selected metric
+    if metric_col == "freshness_monthly":
+        # View 1: Monthly binned freshness with release markers
+        with st.spinner("Loading freshness data..."):
+            freshness_data, release_dates = get_freshness_data_by_release()
 
-    # Show data table
-    with st.expander("📊 View Time Series Data"):
-        st.dataframe(ts_data, use_container_width=True)
+        if freshness_data:
+            fig_freshness = create_freshness_stacked_chart(freshness_data, release_dates)
+            st.plotly_chart(fig_freshness, use_container_width=True)
+            st.info(
+                "📊 **View 1:** Container build dates are binned by month. "
+                "Vertical dashed lines show when each RHOAI release was published. "
+                "Bars to the left = containers built before release, bars to the right = containers built after release. "
+                "Each color represents a different RHOAI release version."
+            )
+        else:
+            st.warning("No freshness data available")
 
-    # Summary statistics
-    st.subheader("Summary Statistics")
-    col1, col2, col3, col4 = st.columns(4)
+    elif metric_col == "freshness_histogram":
+        # View 2: Stacked histogram by freshness days
+        with st.spinner("Loading freshness data..."):
+            freshness_data = get_freshness_histogram_data()
 
-    with col1:
-        st.metric("Min", f"{ts_data[metric_col].min():.2f}")
+        if freshness_data:
+            fig_freshness = create_freshness_histogram_stacked(freshness_data)
+            st.plotly_chart(fig_freshness, use_container_width=True)
+            st.info(
+                "📊 **View 2:** Stacked histogram showing container freshness in days. "
+                "Negative values (left) = containers built BEFORE release. "
+                "Positive values (right) = containers built AFTER release. "
+                "Red vertical line marks the release date. "
+                "Each color represents a different RHOAI release version."
+            )
+        else:
+            st.warning("No freshness data available")
 
-    with col2:
-        st.metric("Max", f"{ts_data[metric_col].max():.2f}")
+    else:
+        # Show regular time series chart
+        fig = create_time_series_chart(ts_data, metric_col, selected_metric_label, y_min, y_max)
+        st.plotly_chart(fig, use_container_width=True)
 
-    with col3:
-        st.metric("Mean", f"{ts_data[metric_col].mean():.2f}")
+    # Show data table (only for non-freshness views)
+    if metric_col not in ["freshness_monthly", "freshness_histogram"]:
+        with st.expander("📊 View Time Series Data"):
+            st.dataframe(ts_data, use_container_width=True)
 
-    with col4:
-        st.metric("Latest", f"{ts_data[metric_col].iloc[-1]:.2f}")
+        # Summary statistics
+        st.subheader("Summary Statistics")
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("Min", f"{ts_data[metric_col].min():.2f}")
+
+        with col2:
+            st.metric("Max", f"{ts_data[metric_col].max():.2f}")
+
+        with col3:
+            st.metric("Mean", f"{ts_data[metric_col].mean():.2f}")
+
+        with col4:
+            st.metric("Latest", f"{ts_data[metric_col].iloc[-1]:.2f}")
+
+
+# ===== DOCUMENTATION VIEW =====
+else:  # view == "Documentation"
+    st.header("📚 Documentation")
+
+    # Load and display markdown documentation
+    from pathlib import Path
+    doc_path = Path(__file__).parent / "DOCUMENTATION.md"
+
+    try:
+        with open(doc_path, "r") as f:
+            st.markdown(f.read(), unsafe_allow_html=False)
+    except FileNotFoundError:
+        st.error(f"Documentation file not found at: {doc_path}")
+        st.info("Please ensure DOCUMENTATION.md exists in the app directory.")
 
 
 # Footer

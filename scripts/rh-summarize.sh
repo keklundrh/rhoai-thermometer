@@ -160,13 +160,26 @@ cd $BASE_DIR
 mkdir -p $RELS_DIR
 echo $BUNDLE $IMAGES | tr -s '[:space:]' '\n' > $RELS_DIR/rhoai-$2.txt
 
+# Sequential processing (original)
+# cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do
+#     fn_generate_sbom $IMAGE $IMGS_DIR
+#     fn_scan_sbom $IMAGE $IMGS_DIR
+# done
 
-cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do #xargs -n 1 -P $JOBS bash -c '
-    fn_generate_sbom $IMAGE $IMGS_DIR
-    fn_scan_sbom $IMAGE $IMGS_DIR
-# ' -
-done
+# Export functions so they're available to subshells spawned by xargs
+export -f fn_generate_sbom
+export -f fn_scan_sbom
+export IMGS_DIR
+export JOBS
 
+# Parallel processing with xargs
+cat $RELS_DIR/rhoai-$2.txt | xargs -n 1 -P $JOBS bash -c '
+    IMAGE="$1"
+    fn_generate_sbom "$IMAGE" "$IMGS_DIR"
+    fn_scan_sbom "$IMAGE" "$IMGS_DIR"
+' _
+
+SCAN_FILES_LIST=""
 cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do 
     
     REPO=${IMAGE%%/*}
@@ -213,9 +226,9 @@ cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do
             
 
 	    cat $VEX_DIR/$YEAR/$CVE_LOW.json | jq -r '
-                [ 
-                    ([.vulnerabilities[].discovery_date?] | map(select(.!=null)) | sort | .[0] | split("T")[0] // "NOT-FOUND"),
-                    ([.vulnerabilities[].remediations[]?.date?] | map(select(.!=null)) | sort | .[0] | split("T")[0] // "NOT-FOUND")
+                [
+                    ([.vulnerabilities[].discovery_date?] | map(select(.!=null)) | sort | .[0] // null | if . then split("T")[0] else "NOT-FOUND" end),
+                    ([.vulnerabilities[].remediations[]?.date?] | map(select(.!=null)) | sort | .[0] // null | if . then split("T")[0] else "NOT-FOUND" end)
                 ] | @tsv
                 '  2> /dev/null || echo "NO-RH-VEX\tNO-RH-VEX"
     done
@@ -229,10 +242,19 @@ cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do
 
     paste $TMP_DIR/$SHA.grype.$(date +%F).tsv $TMP_DIR/$SHA.grype.$(date +%F).vex.dat $TMP_DIR/$SHA.meta.dat > $SCAN_DIR/$SHA.grype.$(date +%F).tsv
 
+    SCAN_FILES_LIST="$SCAN_FILES_LIST $SCAN_DIR/$SHA.grype.$(date +%F).tsv"
 done 
 
 mkdir -p $SUMM_DIR
-FIRST_FILE=$(find . -type f -name "*$(date +%F).tsv" | sort | head -n 1)
-head -n 1 $FIRST_FILE > $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv 
-find . -type f -name "*$(date +%F).tsv" -exec tail -q -n +2 {} + >> $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv
 
+# Original - bugged
+# FIRST_FILE=$(find . -type f -name "*$(date +%F).tsv" | sort | head -n 1)
+# head -n 1 $FIRST_FILE > $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv 
+# find . -type f -name "*$(date +%F).tsv" -exec tail -q -n +2 {} + >> $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv
+
+FIRST_FILE=$(echo $SCAN_FILES_LIST | awk '{print $1}')
+head -n 1 $FIRST_FILE > $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv
+
+for TSV_FILE in $SCAN_FILE_LIST; do 
+    tail -n +2 $TSV_FILE >> $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv
+done
