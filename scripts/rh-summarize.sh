@@ -1,11 +1,16 @@
-#!/bin/bash 
+#!/bin/bash
+# Usage: ./rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION> [today|release] [CVSS_THRESHOLD]
+# Examples:
+#   ./rh-summarize.sh 4.18 2.19.0              # Scan at release date, default CVSS 0.0 (no filtering)
+#   ./rh-summarize.sh 4.18 2.19.0 today        # Scan with today's CVE data, default CVSS 0.0
+#   ./rh-summarize.sh 4.18 2.19.0 release 8.0  # Scan at release date, filter CVSS >= 8.0
 
 
 #BASENAME=${1##*/}
 #IMAGE=${BASENAME%%:*}
 #EXPORT_IMAGE=/tmp/${IMAGE}.tar
 #GRYPE_DIR=grype_scans
-#GRYPE_OUT=${GRYPE_DIR}/${IMAGE}.grype.$(date +%m%d%Y).json 
+#GRYPE_OUT=${GRYPE_DIR}/${IMAGE}.grype.$(date +%m%d%Y).json
 #SUMM_TMP=/tmp/${IMAGE}.grype.$(date +%m%d%Y).tsv
 #SUMM_OUT=${GRYPE_OUT%.*}.tsv
 BASE_DIR=$(pwd)
@@ -18,7 +23,7 @@ SUMM_DIR=data/summary
 VEX_DIR=data/vex
 TMP_DIR=/tmp/
 JOBS=8
-CVE_SCORE=7.9
+CVE_SCORE=${4:-0.0}  # Default to 0.0 (no filtering) to let frontend handle filtering
 VER="$2"
 [[ "$VER" == *.0 ]] && VER="${VER%.0}"
 

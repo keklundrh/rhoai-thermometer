@@ -16,6 +16,45 @@ else:
 
 
 @st.cache_data(ttl=300)
+def get_min_cvss_score() -> float:
+    """
+    Calculate the minimum CVSS score across all data files.
+    For each row, takes the maximum of (base-score, rel-base-score),
+    then returns the minimum of those maximums.
+
+    This reflects the OR logic: a CVE qualifies if EITHER score is high enough.
+
+    Returns:
+        Minimum qualifying CVSS score found across all releases (excluding "NA" values)
+    """
+    releases = get_available_releases()
+    min_score = 10.0  # Start with max possible
+
+    for rhoai_ver, ocp_ver, filepath in releases:
+        try:
+            df = load_release_data(filepath)
+            if df.empty:
+                continue
+
+            # Convert to numeric, treating "NA" as NaN
+            base_scores = pd.to_numeric(df['base-score'], errors='coerce')
+            rel_scores = pd.to_numeric(df['rel-base-score'], errors='coerce')
+
+            # For each row, take the max of the two scores (OR logic)
+            max_per_row = pd.concat([base_scores, rel_scores], axis=1).max(axis=1)
+
+            # Get the minimum of those maximums (excluding NaN)
+            if max_per_row.notna().any():
+                min_score = min(min_score, max_per_row.min())
+
+        except Exception:
+            continue
+
+    # Round down to nearest 0.1 for cleaner slider values
+    return round(min_score, 1) if min_score < 10.0 else 0.0
+
+
+@st.cache_data(ttl=300)
 def get_available_releases() -> List[Tuple[str, str, str]]:
     """
     Scan data/summary directory for RELEASE.tsv files.
@@ -84,12 +123,14 @@ def load_release_data(filepath: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def compute_release_metrics(df: pd.DataFrame) -> Dict:
+def compute_release_metrics(df: pd.DataFrame, cvss_threshold: float = None, severity_filter: List[str] = None) -> Dict:
     """
     Compute summary metrics for a release.
 
     Args:
         df: DataFrame with CVE data
+        cvss_threshold: Minimum CVSS score (applied to base-score OR rel-base-score)
+        severity_filter: List of severity levels to include (OR logic)
 
     Returns:
         Dictionary with metrics:
@@ -126,7 +167,7 @@ def compute_release_metrics(df: pd.DataFrame) -> Dict:
             'df_filtered': pd.DataFrame()
         }
 
-    # FILTER: Only keep CVEs that existed at release time
+    # FILTER 1: Only keep CVEs that existed at release time
     # (DISCOVERY_DATE <= RELEASE_DATE)
     # Excludes NO-RH-VEX and other unparseable dates (we can't confirm they existed at release)
     df_filtered = df.copy()
@@ -138,6 +179,21 @@ def compute_release_metrics(df: pd.DataFrame) -> Dict:
     mask_discovered_at_or_before_release = df_filtered['DISCOVERY_DATE_dt'] <= df_filtered['RELEASE_DATE_dt']
 
     df_filtered = df_filtered[mask_valid_dates & mask_discovered_at_or_before_release]
+
+    # FILTER 2: Apply CVSS or Severity filter
+    if cvss_threshold is not None:
+        # CVSS filter: base-score OR rel-base-score >= threshold
+        # Convert score columns to numeric, treating "NA" as NaN
+        df_filtered['base-score-num'] = pd.to_numeric(df_filtered['base-score'], errors='coerce')
+        df_filtered['rel-base-score-num'] = pd.to_numeric(df_filtered['rel-base-score'], errors='coerce')
+
+        # Include if EITHER score >= threshold
+        mask_cvss = (df_filtered['base-score-num'] >= cvss_threshold) | (df_filtered['rel-base-score-num'] >= cvss_threshold)
+        df_filtered = df_filtered[mask_cvss]
+
+    elif severity_filter is not None and len(severity_filter) > 0:
+        # Severity filter: include CVEs matching any selected severity (OR logic)
+        df_filtered = df_filtered[df_filtered['severity'].isin(severity_filter)]
 
     if df_filtered.empty:
         return {
@@ -295,9 +351,13 @@ def compute_release_metrics(df: pd.DataFrame) -> Dict:
 
 
 @st.cache_data(ttl=300)
-def get_time_series_data() -> pd.DataFrame:
+def get_time_series_data(cvss_threshold: float = None, severity_filter: tuple = None) -> pd.DataFrame:
     """
     Load all releases and compute metrics for time series visualization.
+
+    Args:
+        cvss_threshold: Minimum CVSS score filter
+        severity_filter: Tuple of severity levels to include (tuple for caching)
 
     Returns:
         DataFrame with columns:
@@ -311,10 +371,13 @@ def get_time_series_data() -> pd.DataFrame:
     """
     releases = get_available_releases()
 
+    # Convert tuple back to list for processing
+    severity_list = list(severity_filter) if severity_filter else None
+
     data = []
     for rhoai_ver, ocp_ver, filepath in releases:
         df = load_release_data(filepath)
-        metrics = compute_release_metrics(df)
+        metrics = compute_release_metrics(df, cvss_threshold=cvss_threshold, severity_filter=severity_list)
 
         data.append({
             'rhoai_version': rhoai_ver,

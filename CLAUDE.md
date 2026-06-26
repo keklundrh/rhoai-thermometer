@@ -14,11 +14,14 @@ Before first run:
 
 ## Running Scans
 
-Main script: `./rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION> [today|release]`
+Main script: `./rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION> [today|release] [CVSS_THRESHOLD]`
 
 Examples:
-- `./rh-summarize.sh 4.18 2.19.0` — scan RHOAI 2.19.0 on OCP 4.18 using CVEs as of release date
-- `./rh-summarize.sh 4.18 2.19.0 today` — scan same version using today's CVE database
+- `./rh-summarize.sh 4.18 2.19.0` — scan RHOAI 2.19.0 on OCP 4.18 using CVEs as of release date, no CVSS filtering (default 0.0)
+- `./rh-summarize.sh 4.18 2.19.0 today` — scan same version using today's CVE database, no filtering
+- `./rh-summarize.sh 4.18 2.19.0 release 8.0` — scan at release date, only include CVEs with CVSS >= 8.0
+
+**CVSS Filtering:** The optional 4th parameter sets a minimum CVSS threshold. Default is 0.0 (no filtering). The filter applies to base-score OR rel-base-score. Best practice: run scans without filtering to capture all CVEs, then use the frontend filtering UI for dynamic analysis.
 
 The script:
 1. Fetches image list from Red Hat operator catalog for the specified OCP version

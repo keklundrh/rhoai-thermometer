@@ -5,7 +5,7 @@ A Streamlit dashboard for analyzing CVE vulnerabilities in RHOAI container image
 
 import streamlit as st
 import pandas as pd
-from data_loader import get_available_releases, load_release_data, compute_release_metrics, get_time_series_data, get_freshness_data_by_release, get_freshness_histogram_data
+from data_loader import get_available_releases, load_release_data, compute_release_metrics, get_time_series_data, get_freshness_data_by_release, get_freshness_histogram_data, get_min_cvss_score
 from utils import create_severity_chart, create_time_series_chart, create_freshness_chart, create_freshness_stacked_chart, create_freshness_histogram_stacked
 
 
@@ -19,6 +19,51 @@ st.set_page_config(
 # Title
 st.title("🌡️ RHOAI Thermometer - CVE Dashboard")
 st.markdown("Security vulnerability analysis for Red Hat OpenShift AI releases")
+
+# Sidebar - Filtering Section
+st.sidebar.header("🔍 Filters")
+
+# Calculate dynamic minimum CVSS across all data files
+min_cvss = get_min_cvss_score()
+# Default is 8.0 or the minimum value, whichever is greater
+default_cvss = max(8.0, min_cvss)
+
+# Filter type selector
+filter_type = st.sidebar.radio(
+    "Filter By",
+    ["CVSS Score", "Severity"],
+    help="Choose to filter by CVSS score threshold or severity level"
+)
+
+if filter_type == "CVSS Score":
+    cvss_threshold = st.sidebar.slider(
+        "Minimum CVSS Score",
+        min_value=min_cvss,
+        max_value=10.0,
+        value=default_cvss,
+        step=0.1,
+        help=f"Include CVEs where base-score OR rel-base-score >= this value (data range: {min_cvss:.1f}-10.0)"
+    )
+    # Allow text input override
+    cvss_text_input = st.sidebar.number_input(
+        "Or enter exact value",
+        min_value=min_cvss,
+        max_value=10.0,
+        value=cvss_threshold,
+        step=0.1
+    )
+    cvss_threshold = cvss_text_input
+    severity_filter = None
+else:  # Severity
+    severity_filter = st.sidebar.multiselect(
+        "Select Severity Levels",
+        options=["Critical", "High", "Medium", "Low"],
+        default=["Critical", "High"],
+        help="Include CVEs matching any selected severity (OR logic)"
+    )
+    cvss_threshold = None
+
+st.sidebar.markdown("---")
 
 # Sidebar - View selector
 view = st.sidebar.radio(
@@ -39,6 +84,12 @@ if not releases:
 if view == "Release View":
     st.header("Release Analysis")
 
+    # Show active filter
+    if cvss_threshold is not None:
+        st.info(f"🔍 **Active Filter:** CVSS Score ≥ {cvss_threshold}")
+    elif severity_filter:
+        st.info(f"🔍 **Active Filter:** Severity = {', '.join(severity_filter)}")
+
     # Release selector
     release_options = {f"RHOAI {rhoai} (OCP {ocp})": (rhoai, ocp, path)
                       for rhoai, ocp, path in releases}
@@ -54,7 +105,7 @@ if view == "Release View":
     # Load data
     with st.spinner(f"Loading data for RHOAI {rhoai_ver}..."):
         df = load_release_data(filepath)
-        metrics = compute_release_metrics(df)
+        metrics = compute_release_metrics(df, cvss_threshold=cvss_threshold, severity_filter=severity_filter)
 
     # Display metrics
     st.subheader("Summary Metrics")
@@ -197,6 +248,12 @@ if view == "Release View":
 elif view == "Time Series View":
     st.header("Time Series Analysis")
 
+    # Show active filter
+    if cvss_threshold is not None:
+        st.info(f"🔍 **Active Filter:** CVSS Score ≥ {cvss_threshold}")
+    elif severity_filter:
+        st.info(f"🔍 **Active Filter:** Severity = {', '.join(severity_filter)}")
+
     # Metric selector
     metric_options = {
         "Total CVEs at release": "total_cves",
@@ -217,9 +274,10 @@ elif view == "Time Series View":
 
     metric_col = metric_options[selected_metric_label]
 
-    # Load time series data
+    # Load time series data (convert list to tuple for caching)
     with st.spinner("Loading time series data..."):
-        ts_data = get_time_series_data()
+        severity_tuple = tuple(severity_filter) if severity_filter else None
+        ts_data = get_time_series_data(cvss_threshold=cvss_threshold, severity_filter=severity_tuple)
 
     if ts_data.empty:
         st.error("No time series data available")
