@@ -1,9 +1,8 @@
 #!/bin/bash
-# Usage: ./rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION> [today|release] [CVSS_THRESHOLD]
+# Usage: ./rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION> [CVSS_THRESHOLD]
 # Examples:
-#   ./rh-summarize.sh 4.18 2.19.0              # Scan at release date, default CVSS 0.0 (no filtering)
-#   ./rh-summarize.sh 4.18 2.19.0 today        # Scan with today's CVE data, default CVSS 0.0
-#   ./rh-summarize.sh 4.18 2.19.0 release 8.0  # Scan at release date, filter CVSS >= 8.0
+#   ./rh-summarize.sh 4.18 2.19.0       # Scan at release date, default CVSS 0.0 (no filtering)
+#   ./rh-summarize.sh 4.18 2.19.0 8.0   # Scan at release date, filter CVSS >= 8.0
 
 
 #BASENAME=${1##*/}
@@ -23,7 +22,7 @@ SUMM_DIR=data/summary
 VEX_DIR=data/vex
 TMP_DIR=/tmp/
 JOBS=8
-CVE_SCORE=${4:-0.0}  # Default to 0.0 (no filtering) to let frontend handle filtering
+CVE_SCORE=${3:-0.0}  # Default to 0.0 (no filtering) to let frontend handle filtering
 VER="$2"
 [[ "$VER" == *.0 ]] && VER="${VER%.0}"
 
@@ -41,14 +40,9 @@ export VEX_DIR
 export RELS_DIR
 export REL_DATE
 
-if [[ $3 == "today" ]]; then 
-    SCAN_DATE=$(date +%F)
-    SCAN="CVEs-TODAY"
-    
-else 
-    SCAN_DATE=$REL_DATE
-    SCAN="RELEASE"
-fi
+# Always scan at release date
+SCAN_DATE=$REL_DATE
+SCAN="RELEASE"
 
 #TODO 
 # create reference file to join later, or pass args to jq to print on each line
@@ -101,7 +95,7 @@ fn_cve_summary () {
     echo "SUMMARIZE FILTERED ($CVE_SCORE) CVEs: $1"
 
     {
-    echo -e "id\tseverity\tbase-score\tpackage\tversion\tfix-verion\trel-base-score\tcontainer-build-date" 
+    echo -e "id\tseverity\tbase-score\tpackage\tversion\tfix-version\trel-base-score\tcontainer-build-date" 
     jq -r '
      . as $doc
      | ($doc.source.target.labels["build-date"]? // "UNKNOWN") as $build
@@ -231,8 +225,23 @@ rm $TMP_DIR/*.tsv $TMP_DIR/*.dat 2>/dev/null
 
 echo "GET IMAGES: rhoai $2 images on OCP $1"
 
-# Fetch the catalog with error handling
-CATALOG=$(podman run --rm --entrypoint bash registry.redhat.io/redhat/redhat-operator-index:v$1 -c 'cat /configs/rhods-operator/catalog.json' 2>&1)
+# Detect catalog format (JSON for OCP <= 4.18, YAML for OCP >= 4.20)
+CATALOG_FILE=$(podman run --rm --entrypoint bash registry.redhat.io/redhat/redhat-operator-index:v$1 -c 'ls /configs/rhods-operator/catalog.* 2>/dev/null | head -1' 2>&1)
+
+if [[ "$CATALOG_FILE" == *"catalog.json" ]]; then
+    echo "Using JSON catalog format"
+    YQ_FORMAT="-p=json"
+elif [[ "$CATALOG_FILE" == *"catalog.yaml" ]]; then
+    echo "Using YAML catalog format"
+    YQ_FORMAT=""
+else
+    echo "ERROR: No catalog file found for OCP $1"
+    echo "Expected: /configs/rhods-operator/catalog.json or catalog.yaml"
+    exit 1
+fi
+
+# Fetch the catalog
+CATALOG=$(podman run --rm --entrypoint bash registry.redhat.io/redhat/redhat-operator-index:v$1 -c "cat $CATALOG_FILE" 2>&1)
 CATALOG_EXIT=$?
 
 # Check if podman command failed
@@ -242,30 +251,14 @@ if [ $CATALOG_EXIT -ne 0 ]; then
     exit 1
 fi
 
-# Check if catalog is valid JSON
-if ! echo "$CATALOG" | tr -d '\000-\037' | jq empty 2>/dev/null; then
-    echo "ERROR: Invalid catalog data received from OCP $1"
-    exit 1
-fi
+# Extract bundle images using yq (works for both JSON and YAML)
+BUNDLE=$(echo "$CATALOG" | yq eval $YQ_FORMAT 'select(.schema == "olm.bundle") | select(.name == "rhods-operator.'${RHOAI_VERSION:-$2}'") | .relatedImages[] | .image' 2>&1)
 
-# Extract bundle images
-BUNDLE=$(echo $CATALOG | tr -d '\000-\037' | jq -r '
-    select( .schema=="olm.bundle" )
-    | select( .name=="rhods-operator.'${RHOAI_VERSION:-$2}'" )
-    | .relatedImages[]
-    | if .name == "" then "olm_bundle: " + .image else .name + ": " + .image end
-    ' | cut -f 2 -w)
-
-# Check if any bundle images were found
 if [ -z "$BUNDLE" ]; then
-    echo "ERROR: No bundle found for rhods-operator.$2 in OCP $1 catalog"
-    echo ""
-    echo "Available versions in this catalog:"
-    echo "$CATALOG" | tr -d '\000-\037' | jq -r 'select(.schema=="olm.bundle") | .name' | grep "^rhods-operator\." | sort -V | tail -10
-    echo ""
-    echo "Hint: RHOAI 3.x requires OCP 4.20 or later"
+    echo "ERROR: No images found for rhods-operator.$2 in OCP $1 catalog"
     exit 1
 fi
+
 
 cd $RDIH_DIR
 echo "UPDATE: disconnected install helper repo"
@@ -274,13 +267,13 @@ git fetch origin
 git checkout main 
 git reset --hard origin/main
 
-IMAGES=$(git show "$(git rev-list -n 1 --before="$SCAN_DATE" main)":rhoai-$VER.md | grep name | cut -f 2,3 -d: | grep -v -E 'rhods-operator|stable|fast')
+IMAGES=$(git show "$(git rev-list -n 1 --before="$SCAN_DATE" main)":rhoai-$VER.md | grep -oE '[a-z0-9.-]+(\.[a-z]{2,})?/[^ ]+@sha256:[a-f0-9]{64}' | grep -v -E 'rhods-operator|stable|fast')
 cd $BASE_DIR
 
 #IMAGES=$(grep name rhoai-disconnected-install-helper/rhoai-$VER.md | cut -f 2,3 -d: | grep -v -E 'rhods-operator|stable|fast')
 
 mkdir -p $RELS_DIR
-echo $BUNDLE $IMAGES | tr -s '[:space:]' '\n' > $RELS_DIR/rhoai-$2.txt
+echo $BUNDLE $IMAGES | tr -s '[:space:]' '\n' | sort -u > $RELS_DIR/rhoai-$2.txt
 
 # Sequential processing (original)
 # cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do

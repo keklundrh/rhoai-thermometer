@@ -159,6 +159,9 @@ def compute_release_metrics(df: pd.DataFrame, cvss_threshold: float = None, seve
             'freshness_dates': [],
             'pct_no_fix': 0,
             'pct_with_fix': 0,
+            'cves_with_fix_at_release': 0,
+            'cves_with_fix_version_listed': 0,
+            'pct_fix_version_listed': 0,
             'severity_counts': {},
             'pct_fix_before_build': 0,
             'pct_fix_after_build': 0,
@@ -208,6 +211,9 @@ def compute_release_metrics(df: pd.DataFrame, cvss_threshold: float = None, seve
             'freshness_dates': [],
             'pct_no_fix': 0,
             'pct_with_fix': 0,
+            'cves_with_fix_at_release': 0,
+            'cves_with_fix_version_listed': 0,
+            'pct_fix_version_listed': 0,
             'severity_counts': {},
             'pct_fix_before_build': 0,
             'pct_fix_after_build': 0,
@@ -297,6 +303,25 @@ def compute_release_metrics(df: pd.DataFrame, cvss_threshold: float = None, seve
     pct_no_fix = (no_fix_count / total_cves * 100) if total_cves > 0 else 0
     pct_with_fix = 100 - pct_no_fix
 
+    # CVEs with fix available at release (FIX_DATE <= RELEASE_DATE AND fix-version is populated)
+    mask_fix_date_at_release = (df_filtered['FIX_DATE_dt'].notna() &
+                                 df_filtered['RELEASE_DATE_dt'].notna() &
+                                 (df_filtered['FIX_DATE_dt'] <= df_filtered['RELEASE_DATE_dt']))
+
+    mask_has_fix_version = (df_filtered['fix-version'].notna() &
+                            (df_filtered['fix-version'] != 'None') &
+                            (df_filtered['fix-version'] != 'NA') &
+                            (df_filtered['fix-version'] != ''))
+
+    # CVEs with BOTH fix date at release AND fix-version listed
+    cves_with_fix_at_release = (mask_fix_date_at_release & mask_has_fix_version).sum()
+
+    # For the breakdown: use the same denominator as "% CVEs with Fix at Release"
+    # which is total_cves - no_fix_count (updated to use consistent denominator)
+    cves_counted_as_with_fix = total_cves - no_fix_count
+    cves_with_fix_version_listed = (mask_fix_date_at_release & mask_has_fix_version).sum()
+    pct_fix_version_listed = (cves_with_fix_version_listed / cves_counted_as_with_fix * 100) if cves_counted_as_with_fix > 0 else 0
+
     # Severity distribution (from filtered data, UNIQUE CVEs only)
     # Drop duplicates by CVE ID to count each unique CVE once
     severity_counts = df_filtered.drop_duplicates(subset='id')['severity'].value_counts().to_dict()
@@ -341,6 +366,9 @@ def compute_release_metrics(df: pd.DataFrame, cvss_threshold: float = None, seve
         'freshness_dates': freshness_dates,
         'pct_no_fix': pct_no_fix,
         'pct_with_fix': pct_with_fix,
+        'cves_with_fix_at_release': cves_with_fix_at_release,
+        'cves_with_fix_version_listed': cves_with_fix_version_listed,
+        'pct_fix_version_listed': pct_fix_version_listed,
         'severity_counts': severity_counts,
         'pct_fix_before_build': pct_fix_before_build,
         'pct_fix_after_build': pct_fix_after_build,
@@ -386,7 +414,8 @@ def get_time_series_data(cvss_threshold: float = None, severity_filter: tuple = 
             'total_containers': metrics['total_containers'],
             'avg_cves_per_container': metrics['avg_cves_per_container'],
             'pct_no_fix': metrics['pct_no_fix'],
-            'pct_with_fix': metrics['pct_with_fix']
+            'pct_with_fix': metrics['pct_with_fix'],
+            'pct_fix_version_listed': metrics['pct_fix_version_listed']
         })
 
     return pd.DataFrame(data)

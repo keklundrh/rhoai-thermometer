@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 # Title
-st.title("🌡️ RHOAI Thermometer - CVE Dashboard")
+st.title("🌡️ RHOAI Thermometer - CVEs at RELEASE Dashboard")
 st.markdown("Security vulnerability analysis for Red Hat OpenShift AI releases")
 
 # Sidebar - Filtering Section
@@ -111,7 +111,7 @@ if view == "Release View":
     st.subheader("Summary Metrics")
 
     # Row 1: Count metrics
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
         st.metric(
@@ -122,19 +122,26 @@ if view == "Release View":
 
     with col2:
         st.metric(
+            label="CVEs at Release with RH Fix Available",
+            value=f"{metrics['cves_with_fix_at_release']:,}",
+            help="CVEs discovered before release that have BOTH a fix date at release (FIX_DATE <= RELEASE_DATE) AND a fix-version listed"
+        )
+
+    with col3:
+        st.metric(
             label="Unique CVEs",
             value=f"{metrics['unique_cves']:,}",
             help="Number of distinct CVE IDs (same CVE may appear in multiple containers)"
         )
 
-    with col3:
+    with col4:
         st.metric(
             label="Total Containers",
             value=f"{metrics['total_containers']:,}",
             help="Number of unique container images scanned"
         )
 
-    with col4:
+    with col5:
         st.metric(
             label="Avg CVEs per Container",
             value=f"{metrics['avg_cves_per_container']:.1f}",
@@ -157,12 +164,17 @@ if view == "Release View":
         st.metric(
             label="% CVEs with Fix at Release",
             value=f"{metrics['pct_with_fix']:.1f}%",
-            help="CVEs where a fix already existed at RHOAI release date (FIX_DATE < RELEASE_DATE)"
+            help="CVEs where a fix already existed at RHOAI release date (FIX_DATE <= RELEASE_DATE)"
         )
         st.progress(metrics['pct_with_fix'] / 100)
 
     with col3:
-        st.write("")  # Empty column for spacing
+        st.metric(
+            label="% with RH Fix Version Listed",
+            value=f"{metrics['pct_fix_version_listed']:.1f}%",
+            help=f"Of the {metrics['pct_with_fix']:.1f}% CVEs with fix at release, this percentage also has the fix-version field populated"
+        )
+        st.progress(metrics['pct_fix_version_listed'] / 100)
 
     # Charts
     st.subheader("Distribution Analysis")
@@ -262,6 +274,7 @@ elif view == "Time Series View":
         "Average CVEs per Container": "avg_cves_per_container",
         "% CVEs with No Fix": "pct_no_fix",
         "% CVEs with Fix": "pct_with_fix",
+        "% with RH Fix Version Listed": "pct_fix_version_listed",
         "Container Freshness (View 1)": "freshness_monthly",
         "Container Freshness (View 2)": "freshness_histogram"
     }
@@ -285,7 +298,7 @@ elif view == "Time Series View":
 
     # Calculate consistent Y-axis ranges for percentage metrics only
     # Numeric metrics use automatic scaling due to large magnitude differences
-    percentage_metrics = ['pct_no_fix', 'pct_with_fix']
+    percentage_metrics = ['pct_no_fix', 'pct_with_fix', 'pct_fix_version_listed']
 
     if metric_col in percentage_metrics:
         # Get min/max across all percentage metrics for consistent axis

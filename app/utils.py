@@ -144,7 +144,7 @@ def create_severity_chart(severity_counts: dict) -> go.Figure:
 
 def create_time_series_chart(df, metric_col: str, metric_label: str, y_min: float = None, y_max: float = None) -> go.Figure:
     """
-    Create a line chart showing metric evolution over RHOAI versions.
+    Create a line chart showing metric evolution over RHOAI versions with a linear trendline.
 
     Args:
         df: DataFrame with 'rhoai_version' column and metric columns
@@ -156,8 +156,11 @@ def create_time_series_chart(df, metric_col: str, metric_label: str, y_min: floa
     Returns:
         Plotly Figure object
     """
+    import pandas as pd
+
     fig = go.Figure()
 
+    # Main data line
     fig.add_trace(go.Scatter(
         x=df['rhoai_version'],
         y=df[metric_col],
@@ -168,13 +171,55 @@ def create_time_series_chart(df, metric_col: str, metric_label: str, y_min: floa
         hovertemplate='<b>RHOAI %{x}</b><br>' + metric_label + ': %{y:.2f}<extra></extra>'
     ))
 
+    # Calculate linear trendline
+    # Convert x-axis to numeric indices for linear regression
+    x_numeric = np.arange(len(df))
+    y_values = df[metric_col].values
+
+    # Linear regression
+    z = np.polyfit(x_numeric, y_values, 1)
+    p = np.poly1d(z)
+    trendline_y = p(x_numeric)
+
+    # Calculate trend (slope per release)
+    slope = z[0]
+    trend_direction = "increasing" if slope > 0 else "decreasing"
+
+    # Add trendline
+    fig.add_trace(go.Scatter(
+        x=df['rhoai_version'],
+        y=trendline_y,
+        mode='lines',
+        name='Trend',
+        line=dict(color='lightgray', width=2, dash='dash'),
+        hovertemplate=f'<b>Trendline</b><br>Slope: {slope:.2f} per release<extra></extra>',
+        showlegend=True
+    ))
+
     # Build layout with optional Y-axis range
     layout_config = {
         'title': f"{metric_label} Over Time",
         'xaxis_title': "RHOAI Version",
         'yaxis_title': metric_label,
         'height': 500,
-        'hovermode': 'x unified'
+        'hovermode': 'x unified',
+        'annotations': [
+            dict(
+                x=0.02,
+                y=0.98,
+                xref='paper',
+                yref='paper',
+                text=f"Trend: {trend_direction} ({slope:+.2f} per release)",
+                showarrow=False,
+                font=dict(size=11, color='gray'),
+                xanchor='left',
+                yanchor='top',
+                bgcolor='rgba(255, 255, 255, 0.8)',
+                bordercolor='lightgray',
+                borderwidth=1,
+                borderpad=4
+            )
+        ]
     }
 
     # Set Y-axis range if provided (add 5% margin for readability)
