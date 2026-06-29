@@ -2,16 +2,9 @@
 # Usage: ./rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION> [CVSS_THRESHOLD]
 # Examples:
 #   ./rh-summarize.sh 4.18 2.19.0       # Scan at release date, default CVSS 0.0 (no filtering)
-#   ./rh-summarize.sh 4.18 2.19.0 8.0   # Scan at release date, filter CVSS >= 8.0
+#   ./rh-summarize.sh 4.18 2.19.0 8.0   # Scan at release date, filter CVSS > 8.0
 
 
-#BASENAME=${1##*/}
-#IMAGE=${BASENAME%%:*}
-#EXPORT_IMAGE=/tmp/${IMAGE}.tar
-#GRYPE_DIR=grype_scans
-#GRYPE_OUT=${GRYPE_DIR}/${IMAGE}.grype.$(date +%m%d%Y).json
-#SUMM_TMP=/tmp/${IMAGE}.grype.$(date +%m%d%Y).tsv
-#SUMM_OUT=${GRYPE_OUT%.*}.tsv
 BASE_DIR=$(pwd)
 RDIH_DIR=rhoai-disconnected-install-helper
 VEX_URL="https://security.access.redhat.com/data/csaf/v2/vex"
@@ -43,12 +36,6 @@ export REL_DATE
 # Always scan at release date
 SCAN_DATE=$REL_DATE
 SCAN="RELEASE"
-
-#TODO 
-# create reference file to join later, or pass args to jq to print on each line
-# GHSA has published date in the local json file, don't need to hit RH VEX DATA since RH doesn't always have CVEs mapped to GHSA
-# need to make it clear the cve counter looks at CVEs on release date 
-# add parallel scanning back to the script
 
 
 fn_generate_sbom () {
@@ -149,8 +136,28 @@ fn_download_vex() {
                 curl -s -o $VEX_DIR/$YEAR/$CVE_LOW.json $VEX_URL/$YEAR/$CVE_LOW.json
             fi
         fi
-    elif [[ "$CVE" == GO-* ]]; then 
-        : # not doing yet 
+    elif [[ "$CVE" == GO-* ]]; then
+        mkdir -p $VEX_DIR/GO
+
+        if [ ! -s $VEX_DIR/GO/$CVE.json ] || [ $VEX_DIR/GO/$CVE.json -ot $CUTOFF_FILE ]; then
+            if ! curl -s -o $VEX_DIR/GO/$CVE.json "https://api.osv.dev/v1/vulns/$CVE" 2>/dev/null; then
+                # GO CVE not found, write placeholder
+                echo '{"id":"NO-GO","go_id":"'$CVE'"}' > $VEX_DIR/GO/$CVE.json
+            fi
+            sleep 1
+        fi
+
+        # Check if GO CVE has a mapped CVE-* alias and download RH VEX for it
+        CVE_TMP=$(cat $VEX_DIR/GO/$CVE.json | jq -r '.aliases[]? // empty' | grep -E '^CVE-' | head -n 1)
+        if [ -n "$CVE_TMP" ]; then
+            YEAR=$(echo $CVE_TMP | cut -d- -f2)
+            CVE_LOW=$(printf '%s' "$CVE_TMP" | tr '[:upper:]' '[:lower:]')
+
+            mkdir -p $VEX_DIR/$YEAR
+            if [ ! -s $VEX_DIR/$YEAR/$CVE_LOW.json ] || [ $VEX_DIR/$YEAR/$CVE_LOW.json -ot $CUTOFF_FILE ]; then
+                curl -s -o $VEX_DIR/$YEAR/$CVE_LOW.json $VEX_URL/$YEAR/$CVE_LOW.json
+            fi
+        fi
     fi
 
 }
@@ -196,8 +203,30 @@ fn_enrich_image_cve_data() {
                     ] | @tsv
                     ' 2> /dev/null || echo -e "NO-RH-VEX\tNO-RH-VEX"
             fi
-        elif [[ "$CVE" == GO-* ]]; then 
-            echo -e "NO-GO-VEX\tNO-GO-VEX"
+        elif [[ "$CVE" == GO-* ]]; then
+            GO_ID=$(cat $VEX_DIR/GO/$CVE.json | jq -r '.id // "NO-GO"')
+            if [ "$GO_ID" == "NO-GO" ] || [ "$GO_ID" == "null" ]; then
+                echo -e "NO-GO-VEX\tNO-GO-VEX"
+            else
+                # Check if GO CVE has a mapped CVE-* alias
+                CVE_TMP=$(cat $VEX_DIR/GO/$CVE.json | jq -r '.aliases[]? // empty' | grep -E '^CVE-' | head -n 1)
+                if [ -n "$CVE_TMP" ]; then
+                    # Has CVE mapping - read RH VEX for mapped CVE
+                    YEAR=$(echo $CVE_TMP | cut -d- -f2)
+                    CVE_LOW=$(printf '%s' $CVE_TMP | tr '[:upper:]' '[:lower:]')
+                    cat $VEX_DIR/$YEAR/$CVE_LOW.json | jq -r '
+                        [
+                            ([.vulnerabilities[].discovery_date?] | map(select(.!=null)) | sort | .[0] // null | if . then split("T")[0] else "NOT-FOUND" end),
+                            ([.vulnerabilities[].remediations[]?.date?] | map(select(.!=null)) | sort | .[0] // null | if . then split("T")[0] else "NOT-FOUND" end)
+                        ] | @tsv
+                        ' 2> /dev/null || echo -e "NO-RH-VEX\tNO-RH-VEX"
+                else
+                    # No CVE mapping - use GO CVE published/modified dates
+                    GO_PUBLISHED=$(cat $VEX_DIR/GO/$CVE.json | jq -r '.published // "NOT-FOUND"' | cut -d'T' -f1)
+                    GO_MODIFIED=$(cat $VEX_DIR/GO/$CVE.json | jq -r '.modified // "NOT-FOUND"' | cut -d'T' -f1)
+                    echo -e "$GO_PUBLISHED\t$GO_MODIFIED"
+                fi
+            fi
         else
             echo -e "NO-RH-VEX\tNO-RH-VEX"
         fi

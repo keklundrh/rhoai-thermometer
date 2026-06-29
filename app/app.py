@@ -122,9 +122,9 @@ if view == "Release View":
 
     with col2:
         st.metric(
-            label="CVEs at Release with RH Fix Available",
+            label="CVEs with RH Fix Available at Release",
             value=f"{metrics['cves_with_fix_at_release']:,}",
-            help="CVEs discovered before release that have BOTH a fix date at release (FIX_DATE <= RELEASE_DATE) AND a fix-version listed"
+            help="CVEs where a fix existed somewhere in the Red Hat ecosystem at release date (FIX_DATE <= RELEASE_DATE) with fix-version listed. Note: Fix availability doesn't guarantee the fix was deployed in RHOAI containers - that depends on container rebuild cycles."
         )
 
     with col3:
@@ -156,7 +156,7 @@ if view == "Release View":
         st.metric(
             label="% CVEs with No Fix at Release",
             value=f"{metrics['pct_no_fix']:.1f}%",
-            help="CVEs where no fix existed at RHOAI release date (FIX_DATE > RELEASE_DATE or NO-RH-VEX)"
+            help="CVEs where no fix existed anywhere in the Red Hat ecosystem at RHOAI release date (FIX_DATE > RELEASE_DATE or NO-RH-VEX)"
         )
         st.progress(metrics['pct_no_fix'] / 100)
 
@@ -164,15 +164,15 @@ if view == "Release View":
         st.metric(
             label="% CVEs with Fix at Release",
             value=f"{metrics['pct_with_fix']:.1f}%",
-            help="CVEs where a fix already existed at RHOAI release date (FIX_DATE <= RELEASE_DATE)"
+            help="CVEs where a fix already existed somewhere in the Red Hat ecosystem at RHOAI release date (FIX_DATE <= RELEASE_DATE). This indicates fix availability, not necessarily deployment in RHOAI containers."
         )
         st.progress(metrics['pct_with_fix'] / 100)
 
     with col3:
         st.metric(
-            label="% with RH Fix Version Listed",
+            label="% with Fix Version Listed",
             value=f"{metrics['pct_fix_version_listed']:.1f}%",
-            help=f"Of the {metrics['pct_with_fix']:.1f}% CVEs with fix at release, this percentage also has the fix-version field populated"
+            help=f"Of the {metrics['pct_with_fix']:.1f}% CVEs with fix at release, this percentage has the fix-version field populated in VEX data. This indicates Red Hat tracked a specific package version containing the fix, though deployment timing varies by product rebuild cycles."
         )
         st.progress(metrics['pct_fix_version_listed'] / 100)
 
@@ -274,7 +274,7 @@ elif view == "Time Series View":
         "Average CVEs per Container": "avg_cves_per_container",
         "% CVEs with No Fix": "pct_no_fix",
         "% CVEs with Fix": "pct_with_fix",
-        "% with RH Fix Version Listed": "pct_fix_version_listed",
+        "% with Fix Version Listed": "pct_fix_version_listed",
         "Container Freshness (View 1)": "freshness_monthly",
         "Container Freshness (View 2)": "freshness_histogram"
     }

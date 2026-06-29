@@ -93,10 +93,41 @@ Summary TSV files (`data/summary/*.tsv`) contain these tab-separated columns:
 
 ### Fix Availability Metrics
 
+**Important Context:** These metrics reflect when fixes became **available** in the Red Hat ecosystem (RHEL, OCP, RHOAI, or other RH products), not necessarily when they were **deployed** in RHOAI containers. Actual deployment depends on container rebuild cycles.
+
 | Metric | Calculation | Meaning |
 |--------|-------------|---------|
-| **% CVEs with No Fix at Release** | `(FIX_DATE > RELEASE_DATE OR FIX_DATE = 'NO-RH-VEX') / total_cves * 100` | Percentage of CVEs where no fix existed when RHOAI was released. |
-| **% CVEs with Fix at Release** | `100 - % No Fix` | Percentage of CVEs where a fix already existed at RHOAI release date. |
+| **CVEs with RH Fix Available at Release** | Count where `FIX_DATE <= RELEASE_DATE AND fix-version != 'None'` | CVEs where a fix existed somewhere in Red Hat's product ecosystem at the RHOAI release date. For base system packages (libxml2, openssl, krb5), this typically means the fix was available in RHEL and *could* have been pulled into RHOAI containers during rebuild. For application-level dependencies (Go/Python libraries), each product manages versions independently. |
+| **% CVEs with No Fix at Release** | `(FIX_DATE > RELEASE_DATE OR FIX_DATE = 'NO-RH-VEX') / total_cves * 100` | Percentage of CVEs where no fix existed anywhere in the Red Hat ecosystem when RHOAI was released. |
+| **% CVEs with Fix at Release** | `100 - % No Fix` | Percentage of CVEs where a fix already existed somewhere in the Red Hat ecosystem at RHOAI release date. This indicates fix **availability**, not necessarily fix **deployment** in RHOAI containers. |
+| **% with Fix Version Listed** | `(FIX_DATE <= RELEASE_DATE AND fix-version != 'None') / cves_with_fix * 100` | Of CVEs with fix at release, percentage that have the fix-version field populated in Red Hat VEX data. This indicates Red Hat tracked which package version contains the fix. |
+
+### Understanding Fix Availability vs. Deployment
+
+**Key Distinction:**
+- **Fix Available**: A patched package version exists in some Red Hat product (RHEL, OCP, RHOAI, etc.)
+- **Fix Deployed**: The RHOAI container image was rebuilt with the patched package
+
+**Example Timeline:**
+```
+2025-03-10: RHEL 9.2 ships libxml2-2.9.13-3.el9_2.6 (CVE-2024-56171 fixed)
+            → Fix is now AVAILABLE
+
+2025-03-27: RHOAI 2.16 containers rebuilt, pulling in updated libxml2
+            → Fix is now DEPLOYED in RHOAI
+
+Gap: 17 days between availability and deployment
+```
+
+**Why the gap exists:**
+- Container images are rebuilt on product release schedules, not immediately when upstream fixes ship
+- RHOAI containers may be based on different RHEL minor versions (9.2, 9.4) with different update timelines
+- Application-level dependencies (Go, Python packages) are updated independently per product
+
+**Implication for metrics:**
+- A CVE showing "fix at release" means the fix *could have been* included if containers were rebuilt
+- It doesn't guarantee the fix *was actually* in the scanned container images
+- Use container build dates (freshness metrics) to assess how current the images are
 
 ### Distribution Analysis
 
@@ -137,8 +168,9 @@ Select a metric from the dropdown to visualize trends across RHOAI releases.
 | **Unique CVEs** | Automatic | Count of distinct CVE IDs per release |
 | **Total Containers** | Automatic | Number of unique container images per release |
 | **Average CVEs per Container** | Automatic | Mean CVE count across containers |
-| **% CVEs with No Fix** | Consistent (shared) | Percentage of CVEs without fixes at release time |
-| **% CVEs with Fix** | Consistent (shared) | Percentage of CVEs with fixes at release time |
+| **% CVEs with No Fix** | Consistent (shared) | Percentage of CVEs without fixes available in RH ecosystem at release time |
+| **% CVEs with Fix** | Consistent (shared) | Percentage of CVEs with fixes available in RH ecosystem at release time |
+| **% with Fix Version Listed** | Consistent (shared) | Percentage of CVEs with fix version tracked in VEX data |
 | **Container Freshness (View 1)** | Monthly bins | Container build dates binned by calendar month, stacked by release |
 | **Container Freshness (View 2)** | Days histogram | Container freshness in days from release, stacked histogram by release |
 
@@ -184,6 +216,55 @@ Two views are available to analyze container freshness:
 - Helps identify trends in container age at release time
 
 ---
+
+## 📊 Interpreting Fix Metrics
+
+### How to Read "% CVEs with Fix at Release"
+
+This metric answers: **"What percentage of CVEs had a fix available somewhere in the Red Hat ecosystem when this RHOAI release shipped?"**
+
+**High percentage (e.g., 80%+):**
+- ✅ Good: Most CVEs had fixes available in Red Hat products
+- ⚠️ Consideration: Check container freshness - old containers may not have pulled in available fixes
+- 💡 Action: Compare with container build dates to assess if fixes were likely deployed
+
+**Low percentage (e.g., 30%):**
+- ⚠️ Concern: Many CVEs had no available fixes at release time
+- 📊 Cross-reference: Check "% CVEs with No Fix" to see what wasn't fixable
+- 💡 Action: Review CVE discovery dates - recently discovered CVEs may not have fixes yet
+
+### Combining Metrics for Better Insight
+
+**Scenario 1: High fix availability + Fresh containers = Good posture**
+```
+% CVEs with Fix at Release: 85%
+Container Freshness: Most containers built 0-30 days before release
+→ Interpretation: Fixes were available AND likely deployed
+```
+
+**Scenario 2: High fix availability + Stale containers = Missed opportunity**
+```
+% CVEs with Fix at Release: 85%
+Container Freshness: Most containers built 90-180 days before release
+→ Interpretation: Fixes were available but likely NOT deployed
+→ Recommendation: Consider more frequent container rebuilds
+```
+
+**Scenario 3: Low fix availability + Fresh containers = Limited options**
+```
+% CVEs with Fix at Release: 35%
+Container Freshness: Most containers built 0-30 days before release
+→ Interpretation: Even fresh builds couldn't fix most CVEs (no fixes existed)
+→ Recommendation: Focus on tracking when fixes become available post-release
+```
+
+### Using Fix Metrics with Discovery Dates
+
+Cross-reference with `DISCOVERY_DATE` to understand CVE age:
+
+- **CVE discovered months before release, no fix**: Concerning - upstream slow to patch
+- **CVE discovered days before release, no fix**: Expected - insufficient time to patch
+- **CVE discovered before release, fix at release**: Ideal - responsive patching
 
 ## 🔍 Data Filtering Rules
 
