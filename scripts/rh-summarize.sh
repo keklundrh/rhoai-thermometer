@@ -2,8 +2,17 @@
 # Usage: ./rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION> [CVSS_THRESHOLD]
 # Examples:
 #   ./rh-summarize.sh 4.18 2.19.0       # Scan at release date, default CVSS 0.0 (no filtering)
-#   ./rh-summarize.sh 4.18 2.19.0 8.0   # Scan at release date, filter CVSS > 8.0
+#   ./rh-summarize.sh 4.18 2.19.0 8.0   # Scan at release date, filter CVSS >= 8.0
 
+# Validation counters
+EXPECTED_IMAGES=0
+SBOMS_CREATED=0
+SCANS_COMPLETED=0
+SUMMARIES_CREATED=0
+ENRICHMENTS_COMPLETED=0
+UNIQUE_CVES=0
+VEX_DOWNLOADED=0
+START_TIME=$(date +%s)
 
 BASE_DIR=$(pwd)
 RDIH_DIR=rhoai-disconnected-install-helper
@@ -98,7 +107,7 @@ fn_cve_summary () {
         (($build | tostring) | split("T")[0])
        ] 
      | @tsv
-    ' $2 | sort -k3 -n | awk -v score="$CVE_SCORE" -F\t '($3+0 > score ) || ($7+0 > score)'  
+    ' $2 | sort -k3 -n | awk -v score="$CVE_SCORE" -F\t '($3+0 >= score ) || ($7+0 >= score)'  
 } > $3
 
 }
@@ -237,7 +246,11 @@ fn_enrich_image_cve_data() {
     N=$(wc -l < $TMP_DIR/$SHA.grype.$(date +%F).tsv)
     ((N--))
     echo -e "RELEASE_DATE\tREPOSITORY\tIMAGE\tSHA" > $TMP_DIR/$SHA.meta.dat
-    yes "$(printf '%s\t%s\t%s\t%s\n' $REL_DATE $REPO $BASE_IMAGE $SHA)" | head -n $N >> $TMP_DIR/$SHA.meta.dat
+
+    # Only generate metadata lines if there are CVEs (N > 0)
+    if [ $N -gt 0 ]; then
+        yes "$(printf '%s\t%s\t%s\t%s\n' $REL_DATE $REPO $BASE_IMAGE $SHA)" | head -n $N >> $TMP_DIR/$SHA.meta.dat
+    fi
 
     paste $TMP_DIR/$SHA.grype.$(date +%F).tsv $TMP_DIR/$SHA.grype.$(date +%F).vex.dat $TMP_DIR/$SHA.meta.dat > $SCAN_DIR/$SHA.grype.$(date +%F).tsv
 
@@ -304,6 +317,10 @@ cd $BASE_DIR
 mkdir -p $RELS_DIR
 echo $BUNDLE $IMAGES | tr -s '[:space:]' '\n' | sort -u > $RELS_DIR/rhoai-$2.txt
 
+# Count expected images
+EXPECTED_IMAGES=$(wc -l < $RELS_DIR/rhoai-$2.txt)
+echo "Expected images to process: $EXPECTED_IMAGES"
+
 # Sequential processing (original)
 # cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do
 #     fn_generate_sbom $IMAGE $IMGS_DIR
@@ -312,6 +329,7 @@ echo $BUNDLE $IMAGES | tr -s '[:space:]' '\n' | sort -u > $RELS_DIR/rhoai-$2.txt
 
 
 # Parallel processing with xargs
+echo "Stage 1: Generate SBOMs and scan images..."
 cat $RELS_DIR/rhoai-$2.txt | xargs -n 1 -P $JOBS bash -c '
     IMAGE="$1"
     REPO=${IMAGE%%/*}
@@ -327,36 +345,100 @@ cat $RELS_DIR/rhoai-$2.txt | xargs -n 1 -P $JOBS bash -c '
     fn_cve_summary "$IMAGE" "$SCAN_DIR/$SHA.grype.$(date +%F).json" "$TMP_DIR/$SHA.grype.$(date +%F).tsv"
 ' _
 
-echo "GET UNIQUE CVEs" 
+# Validate Stage 1: Count SBOMs and scans
+echo "Validating Stage 1..."
+for IMAGE in $(cat $RELS_DIR/rhoai-$2.txt); do
+    BASE_IMAGE=${IMAGE##*/}
+    BASE_IMAGE=${BASE_IMAGE%@*}
+    SHA=${IMAGE##*@sha256:}
+    WORK_DIR=$IMGS_DIR/$BASE_IMAGE
+
+    # Check SBOM
+    if [ -f "$WORK_DIR/sboms/$SHA.syft.json" ]; then
+        ((SBOMS_CREATED++))
+    fi
+
+    # Check scan
+    if [ -f "$WORK_DIR/scans/$SHA.grype.$(date +%F).json" ]; then
+        ((SCANS_COMPLETED++))
+    fi
+
+    # Check summary
+    if [ -f "$TMP_DIR/$SHA.grype.$(date +%F).tsv" ]; then
+        ((SUMMARIES_CREATED++))
+    fi
+done
+
+echo "  SBOMs created: $SBOMS_CREATED/$EXPECTED_IMAGES"
+echo "  Scans completed: $SCANS_COMPLETED/$EXPECTED_IMAGES"
+echo "  Summaries created: $SUMMARIES_CREATED/$EXPECTED_IMAGES"
+
+if [ $SCANS_COMPLETED -ne $EXPECTED_IMAGES ]; then
+    echo "⚠️  WARNING: Not all images were scanned successfully"
+fi
+
+echo ""
+echo "Stage 2: Extract unique CVEs..."
 cat $RELS_DIR/rhoai-$2.txt | while read -r IMAGE; do
-    
+
     BASE_IMAGE=${IMAGE##*/}
     BASE_IMAGE=${BASE_IMAGE%@*}
     SHA=${IMAGE##*@sha256:}
 
-    if [ -f "$TMP_DIR/$SHA.grype.$(date +%F).tsv" ]; then 
-        tail -n +2 $TMP_DIR/$SHA.grype.$(date +%F).tsv | cut -f1 -w 
+    if [ -f "$TMP_DIR/$SHA.grype.$(date +%F).tsv" ]; then
+        tail -n +2 $TMP_DIR/$SHA.grype.$(date +%F).tsv | cut -f1 -w
     fi
-done | sort -u > $TMP_DIR/rhoai-$2-unique-cves.txt 
+done | sort -u > $TMP_DIR/rhoai-$2-unique-cves.txt
 
-echo "GET VEX FOR UNIQUE CVES"
-while read -r CVE; do 
+UNIQUE_CVES=$(wc -l < $TMP_DIR/rhoai-$2-unique-cves.txt)
+echo "  Unique CVEs found: $UNIQUE_CVES"
+
+echo ""
+echo "Stage 3: Download VEX data for $UNIQUE_CVES unique CVEs..."
+VEX_COUNT=0
+while read -r CVE; do
     fn_download_vex $CVE
+    ((VEX_COUNT++))
+    if [ $((VEX_COUNT % 100)) -eq 0 ]; then
+        echo "  Downloaded VEX data: $VEX_COUNT/$UNIQUE_CVES"
+    fi
 done < $TMP_DIR/rhoai-$2-unique-cves.txt
+echo "  Downloaded VEX data: $VEX_COUNT/$UNIQUE_CVES"
+VEX_DOWNLOADED=$VEX_COUNT
 
-cat $RELS_DIR/rhoai-$2.txt | xargs -n 1 -P $JOBS bash -c ' 
+echo ""
+echo "Stage 4: Enrich image CVE data..."
+cat $RELS_DIR/rhoai-$2.txt | xargs -n 1 -P $JOBS bash -c '
     IMAGE="$1"
     fn_enrich_image_cve_data $IMAGE
 ' _
 
+# Validate Stage 4: Count enriched files
+echo "Validating Stage 4..."
+for IMAGE in $(cat $RELS_DIR/rhoai-$2.txt); do
+    BASE_IMAGE=${IMAGE##*/}
+    BASE_IMAGE=${BASE_IMAGE%@*}
+    SHA=${IMAGE##*@sha256:}
+    WORK_DIR=$IMGS_DIR/$BASE_IMAGE
+
+    # Check enriched file
+    if [ -f "$WORK_DIR/scans/$SHA.grype.$(date +%F).tsv" ]; then
+        ((ENRICHMENTS_COMPLETED++))
+    fi
+done
+
+echo "  Enrichments completed: $ENRICHMENTS_COMPLETED/$EXPECTED_IMAGES"
+
+if [ $ENRICHMENTS_COMPLETED -ne $EXPECTED_IMAGES ]; then
+    echo "⚠️  WARNING: Not all images were enriched successfully"
+fi
+
+echo ""
+echo "Stage 5: Assemble final summary file..."
 mkdir -p $SUMM_DIR
 
-# Original - bugged
-# FIRST_FILE=$(find . -type f -name "*$(date +%F).tsv" | sort | head -n 1)
-# head -n 1 $FIRST_FILE > $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv 
-# find . -type f -name "*$(date +%F).tsv" -exec tail -q -n +2 {} + >> $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv
-
 SCAN_FILES_LIST=""
+MISSING_FILES=0
 for IMAGE in $(cat $RELS_DIR/rhoai-$2.txt); do
     REPO=${IMAGE%%/*}
     BASE_IMAGE=${IMAGE##*/}
@@ -366,12 +448,104 @@ for IMAGE in $(cat $RELS_DIR/rhoai-$2.txt); do
     SBOM_DIR=$WORK_DIR/sboms
     SCAN_DIR=$WORK_DIR/scans
 
-    SCAN_FILES_LIST="$SCAN_FILES_LIST $SCAN_DIR/$SHA.grype.$(date +%F).tsv"
+    TSV_PATH="$SCAN_DIR/$SHA.grype.$(date +%F).tsv"
+    if [ -f "$TSV_PATH" ]; then
+        SCAN_FILES_LIST="$SCAN_FILES_LIST $TSV_PATH"
+    else
+        ((MISSING_FILES++))
+        echo "⚠️  Missing: $TSV_PATH"
+    fi
 done
+
+if [ $MISSING_FILES -gt 0 ]; then
+    echo "⚠️  WARNING: $MISSING_FILES enriched files are missing"
+fi
 
 FIRST_FILE=$(echo $SCAN_FILES_LIST | awk '{print $1}')
 head -n 1 $FIRST_FILE > $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv
 
-for TSV_FILE in $SCAN_FILES_LIST; do 
+for TSV_FILE in $SCAN_FILES_LIST; do
     tail -n +2 $TSV_FILE >> $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv
 done
+
+# Count final output
+TOTAL_CVES=$(tail -n +2 $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv | wc -l)
+echo "  Final summary file: $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv"
+echo "  Total CVE entries: $TOTAL_CVES"
+
+# ============================================
+# FINAL SUMMARY
+# ============================================
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+MINUTES=$((ELAPSED / 60))
+SECONDS=$((ELAPSED % 60))
+
+echo ""
+echo "=========================================="
+echo "SCAN SUMMARY: RHOAI $2 on OCP $1"
+echo "=========================================="
+echo "Release Date: $REL_DATE"
+echo "Scan Date: $(date +%F)"
+echo "CVSS Threshold: $CVE_SCORE"
+echo ""
+echo "Stage 1: SBOM Generation & Scanning"
+echo "  Expected images: $EXPECTED_IMAGES"
+echo "  SBOMs created: $SBOMS_CREATED"
+echo "  Scans completed: $SCANS_COMPLETED"
+echo "  Summaries created: $SUMMARIES_CREATED"
+echo ""
+echo "Stage 2: CVE Extraction"
+echo "  Unique CVEs found: $UNIQUE_CVES"
+echo ""
+echo "Stage 3: VEX Data Download"
+echo "  VEX files downloaded: $VEX_DOWNLOADED"
+echo ""
+echo "Stage 4: Data Enrichment"
+echo "  Enrichments completed: $ENRICHMENTS_COMPLETED"
+echo ""
+echo "Stage 5: Final Assembly"
+echo "  Output file: $SUMM_DIR/ocp-$1-rhoai-$2-$SCAN.tsv"
+echo "  Total CVE entries: $TOTAL_CVES"
+echo ""
+echo "Execution Time: ${MINUTES}m ${SECONDS}s"
+echo ""
+
+# Validation checks
+ERROR_COUNT=0
+
+if [ $SBOMS_CREATED -ne $EXPECTED_IMAGES ]; then
+    echo "❌ ERROR: SBOM count mismatch ($SBOMS_CREATED != $EXPECTED_IMAGES)"
+    ((ERROR_COUNT++))
+fi
+
+if [ $SCANS_COMPLETED -ne $EXPECTED_IMAGES ]; then
+    echo "❌ ERROR: Scan count mismatch ($SCANS_COMPLETED != $EXPECTED_IMAGES)"
+    ((ERROR_COUNT++))
+fi
+
+if [ $SUMMARIES_CREATED -ne $EXPECTED_IMAGES ]; then
+    echo "❌ ERROR: Summary count mismatch ($SUMMARIES_CREATED != $EXPECTED_IMAGES)"
+    ((ERROR_COUNT++))
+fi
+
+if [ $ENRICHMENTS_COMPLETED -ne $EXPECTED_IMAGES ]; then
+    echo "❌ ERROR: Enrichment count mismatch ($ENRICHMENTS_COMPLETED != $EXPECTED_IMAGES)"
+    ((ERROR_COUNT++))
+fi
+
+if [ $VEX_DOWNLOADED -ne $UNIQUE_CVES ]; then
+    echo "❌ ERROR: VEX download count mismatch ($VEX_DOWNLOADED != $UNIQUE_CVES)"
+    ((ERROR_COUNT++))
+fi
+
+if [ $ERROR_COUNT -eq 0 ]; then
+    echo "✅ All validation checks passed"
+    echo "=========================================="
+    exit 0
+else
+    echo ""
+    echo "⚠️  $ERROR_COUNT validation error(s) detected"
+    echo "=========================================="
+    exit 1
+fi
