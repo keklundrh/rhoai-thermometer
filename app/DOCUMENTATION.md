@@ -4,6 +4,8 @@
 
 **Important:** Only **officially supported** RHOAI container images are scanned. Images marked as "Unsupported" or deprecated in the disconnected-install-helper repository are automatically excluded from analysis.
 
+**Default CVSS Threshold:** By default, scans include only CVEs with CVSS ≥ 8.0 (High or Critical severity). The frontend allows dynamic filtering to adjust this threshold or filter by severity levels.
+
 ---
 
 ## 🔍 Scanning Process
@@ -17,18 +19,21 @@ The scanning process (`scripts/rh-summarize.sh`) performs the following steps:
 3. **Filter Unsupported Images** - Automatically excludes images marked as "Unsupported" in the disconnected-install-helper repository. **Only officially supported RHOAI images are scanned.**
 4. **Generate SBOMs** - Creates Software Bill of Materials for each container image using **Syft**
 5. **Scan for Vulnerabilities** - Scans SBOMs with **Grype** to identify CVEs
-6. **Enrich CVE Data** - Fetches metadata from:
-   - Red Hat VEX (Vulnerability Exploitability eXchange) API
-   - GitHub Security Advisories
-7. **Output** - Generates consolidated TSV files in `data/summary/`
-8. **Removes CVES < 8.0** - Including only CVEs with CVSS or related score greater than or equal to 8.0 (following process from two large Red Hat customers)  
+6. **Enrich CVE Data** - Fetches metadata from multiple sources based on vulnerability type:
+   - **CVE-\*** identifiers → Red Hat VEX (Vulnerability Exploitability eXchange) API
+   - **GHSA-\*** identifiers → GitHub Security Advisories API
+   - **GO-\*** identifiers → OSV (Open Source Vulnerabilities) API for Go ecosystem
+7. **Cross-Reference Mappings** - When GHSA or GO identifiers map to CVE-\* aliases, fetches Red Hat VEX data for the mapped CVE
+8. **Filter by CVSS** - By default, includes only CVEs with CVSS ≥ 8.0 (base-score OR rel-base-score)
+9. **Output** - Generates consolidated TSV files in `data/summary/`  
 
 **Key Tools:**
 - `syft` - SBOM generation
-- `grype` - CVE scanning
+- `grype` - CVE scanning (detects CVE-\*, GHSA-\*, and GO-\* identifiers)
 - `jq` - JSON processing
-- `gh` - GitHub API access
+- `gh` - GitHub API access for GHSA data
 - `podman` - Container image inspection
+- `curl` - API calls to Red Hat VEX and OSV databases
 
 ### Caching Strategy
 
@@ -57,13 +62,52 @@ Files are named based off the scan date, for example:
 
 ## 📊 Data Schema
 
+### Vulnerability Identifier Types
+
+The scanner detects three types of vulnerability identifiers:
+
+| Type | Format | Source | Description |
+|------|--------|--------|-------------|
+| **CVE** | `CVE-YYYY-NNNNN` | NVD/MITRE | Standard Common Vulnerabilities and Exposures identifier |
+| **GHSA** | `GHSA-xxxx-xxxx-xxxx` | GitHub | GitHub Security Advisory identifier |
+| **GO** | `GO-YYYY-NNNN` | OSV | Go ecosystem vulnerability identifier from OSV database |
+
+**Enrichment Process:**
+1. All identifiers are scanned by Grype
+2. **CVE-\*** → Fetch Red Hat VEX data directly
+3. **GHSA-\*** → Fetch GitHub advisory, check for CVE-\* alias, then fetch RH VEX if alias exists
+4. **GO-\*** → Fetch OSV data, check for CVE-\* alias, then fetch RH VEX if alias exists
+
+**Fallback Dates:**
+- If GO-\* has no CVE alias: Use `published` date as DISCOVERY_DATE and `modified` date as FIX_DATE
+- If GHSA-\* has no CVE alias: Use `published_at` as DISCOVERY_DATE and `updated_at` as FIX_DATE
+- If no VEX data available: Marked as `NO-RH-VEX`, `NO-GHSA`, or `NO-GO-VEX`
+
+**Why GO Identifiers Matter:**
+- RHOAI containers include Go-compiled binaries (Kubernetes operators, controllers, services)
+- Go dependencies have their own vulnerability tracking separate from CVE
+- OSV provides comprehensive coverage of Go ecosystem vulnerabilities
+- Many GO-\* identifiers map to CVE-\* aliases for cross-referencing
+
+**Example Data Flow for GO Vulnerability:**
+```
+1. Grype detects: GO-2024-3321 in golang.org/x/crypto v0.21.0
+2. Script fetches OSV data: https://api.osv.dev/v1/vulns/GO-2024-3321
+3. OSV response includes alias: CVE-2024-45678
+4. Script fetches RH VEX for CVE-2024-45678
+5. TSV output:
+   - id: GO-2024-3321
+   - DISCOVERY_DATE: From RH VEX (if CVE alias exists) or OSV published date
+   - FIX_DATE: From RH VEX (if CVE alias exists) or OSV modified date
+```
+
 ### TSV File Columns
 
 Summary TSV files (`data/summary/*.tsv`) contain these tab-separated columns:
 
 | Column | Description |
 |--------|-------------|
-| `id` | CVE or GHSA identifier |
+| `id` | Vulnerability identifier (CVE-\*, GHSA-\*, or GO-\*) |
 | `severity` | Low/Medium/High/Critical |
 | `base-score` | CVSS base score from Grype |
 | `package` | Affected package name |
@@ -79,7 +123,7 @@ Summary TSV files (`data/summary/*.tsv`) contain these tab-separated columns:
 | `IMAGE` | Image name without tag/digest |
 | `SHA` | Image SHA256 digest |
 
-> **Note:** Only CVEs with CVSS ≥ 8.0 (either base score or related score) are included in output.
+> **Note:** By default, only CVEs with CVSS ≥ 8.0 (either base-score OR rel-base-score) are included in scan output. The frontend allows dynamic filtering to adjust this threshold.
 
 ---
 
@@ -96,19 +140,41 @@ Summary TSV files (`data/summary/*.tsv`) contain these tab-separated columns:
 
 ### Fix Availability Metrics
 
-**Important Context:** These metrics reflect when fixes became **available** in the Red Hat ecosystem (RHEL, OCP, RHOAI, or other RH products), not necessarily when they were **deployed** in RHOAI containers. Actual deployment depends on container rebuild cycles.
+**Important Context:** These metrics reflect when fixes became **available**, either in the Red Hat ecosystem or upstream sources, not necessarily when they were **deployed** in RHOAI containers. Actual deployment depends on container rebuild cycles.
 
 | Metric | Calculation | Meaning |
 |--------|-------------|---------|
 | **CVEs with RH Fix Available at Release** | Count where `FIX_DATE <= RELEASE_DATE AND fix-version != 'None'` | CVEs where a fix existed somewhere in Red Hat's product ecosystem at the RHOAI release date. For base system packages (libxml2, openssl, krb5), this typically means the fix was available in RHEL and *could* have been pulled into RHOAI containers during rebuild. For application-level dependencies (Go/Python libraries), each product manages versions independently. |
-| **% CVEs with No Fix at Release** | `(FIX_DATE > RELEASE_DATE OR FIX_DATE = 'NO-RH-VEX') / total_cves * 100` | Percentage of CVEs where no fix existed anywhere in the Red Hat ecosystem when RHOAI was released. |
-| **% CVEs with Fix at Release** | `100 - % No Fix` | Percentage of CVEs where a fix already existed somewhere in the Red Hat ecosystem at RHOAI release date. This indicates fix **availability**, not necessarily fix **deployment** in RHOAI containers. |
-| **% with Fix Version Listed** | `(FIX_DATE <= RELEASE_DATE AND fix-version != 'None') / cves_with_fix * 100` | Of CVEs with fix at release, percentage that have the fix-version field populated in Red Hat VEX data. This indicates Red Hat tracked which package version contains the fix. |
+| **% CVEs with No Fix at Release** | `(FIX_DATE > RELEASE_DATE OR FIX_DATE = 'NO-RH-VEX') / total_cves * 100` | Percentage of CVEs where no fix existed when RHOAI was released. |
+| **% CVEs with Fix at Release** | `100 - % No Fix` | Percentage of CVEs where a fix already existed at RHOAI release date. A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems. This indicates fix **availability**, not necessarily fix **deployment** in RHOAI containers. |
+| **% with RH Fix Version** | `(FIX_DATE <= RELEASE_DATE AND fix-version != 'None') / cves_with_fix * 100` | Of CVEs with fix at release, percentage that have the fix-version field populated in Red Hat VEX data. This indicates Red Hat tracked which package version contains the fix - applicability to specific build needs further investigation. |
+
+### Understanding the Three Fix Metrics
+
+These three metrics work together to provide a complete picture of fix status:
+
+1. **% CVEs with Fix at Release** - Broadest measure: indicates a fix existed *somewhere* (Red Hat, upstream, or other ecosystems)
+2. **% with RH Fix Version** - Subset of #1: indicates Red Hat specifically tracked a fix version in their VEX data
+3. **CVEs with RH Fix Available at Release** - Raw count version of #2
+
+**Relationship:**
+```
+All CVEs at Release (100%)
+├─ % CVEs with No Fix at Release
+└─ % CVEs with Fix at Release
+   ├─ Fixes tracked by Red Hat (% with RH Fix Version)
+   └─ Fixes from other sources (upstream, other vendors)
+```
+
+**Example Interpretation:**
+- 85% CVEs with Fix at Release
+- 60% with RH Fix Version
+- Means: 85% had *some* fix, but only 60% of those (i.e., 51% of total) are tracked by Red Hat
 
 ### Understanding Fix Availability vs. Deployment
 
 **Key Distinction:**
-- **Fix Available**: A patched package version exists in some Red Hat product (RHEL, OCP, RHOAI, etc.)
+- **Fix Available**: A patched package version exists (in Red Hat products, upstream, or elsewhere)
 - **Fix Deployed**: The RHOAI container image was rebuilt with the patched package
 
 **Example Timeline:**
@@ -171,9 +237,9 @@ Select a metric from the dropdown to visualize trends across RHOAI releases.
 | **Unique CVEs** | Automatic | Count of distinct CVE IDs per release |
 | **Number of Containers with CVEs** | Automatic | Number of unique container images with at least one CVE |
 | **Average CVEs per Container** | Automatic | Mean CVE count across containers (only containers with CVEs) |
-| **% CVEs with No Fix** | Consistent (shared) | Percentage of CVEs without fixes available in RH ecosystem at release time |
-| **% CVEs with Fix** | Consistent (shared) | Percentage of CVEs with fixes available in RH ecosystem at release time |
-| **% with Fix Version Listed** | Consistent (shared) | Percentage of CVEs with fix version tracked in VEX data |
+| **% CVEs with No Fix** | Consistent (shared) | Percentage of CVEs without fixes available at release time |
+| **% CVEs with Fix** | Consistent (shared) | Percentage of CVEs with fixes available at release time (may or may not be through Red Hat) |
+| **% with RH Fix Version** | Consistent (shared) | Percentage of CVEs with fix version tracked in Red Hat VEX data |
 | **Container Freshness (View 1)** | Monthly bins | Container build dates binned by calendar month, stacked by release |
 | **Container Freshness (View 2)** | Days histogram | Container freshness in days from release, stacked histogram by release |
 
@@ -224,12 +290,14 @@ Two views are available to analyze container freshness:
 
 ### How to Read "% CVEs with Fix at Release"
 
-This metric answers: **"What percentage of CVEs had a fix available somewhere in the Red Hat ecosystem when this RHOAI release shipped?"**
+This metric answers: **"What percentage of CVEs had a fix available when this RHOAI release shipped?"**
+
+**Note:** A fix may be available through Red Hat, upstream sources, or other ecosystems. The "% with RH Fix Version" metric shows which fixes are specifically tracked by Red Hat.
 
 **High percentage (e.g., 80%+):**
-- ✅ Good: Most CVEs had fixes available in Red Hat products
+- ✅ Good: Most CVEs had fixes available somewhere
 - ⚠️ Consideration: Check container freshness - old containers may not have pulled in available fixes
-- 💡 Action: Compare with container build dates to assess if fixes were likely deployed
+- 💡 Action: Compare with "% with RH Fix Version" and container build dates to assess if fixes were likely deployed
 
 **Low percentage (e.g., 30%):**
 - ⚠️ Concern: Many CVEs had no available fixes at release time
@@ -284,9 +352,17 @@ Only CVEs meeting ALL criteria are included:
 - Containers with `container-build-date = 'W'` are **excluded** from freshness calculations
 - All other containers included in total counts
 
-### Severity Threshold
+### CVSS Filtering
 
-Only CVEs with **CVSS ≥ 8.0** (High or Critical) are included in scan output.
+**Default Threshold:** Scan output includes only CVEs with **CVSS ≥ 8.0** (High or Critical severity).
+
+**Filter Logic:** A CVE is included if **either** `base-score` OR `rel-base-score` meets the threshold. This OR logic ensures CVEs are captured even when only one score field is populated.
+
+**Frontend Filtering:** The dashboard provides dynamic filtering options:
+- **CVSS Score slider** - Adjust minimum threshold (default 8.0, range depends on data)
+- **Severity selector** - Filter by Critical, High, Medium, Low (multi-select with OR logic)
+
+**Best Practice:** Run scans without CVSS filtering (threshold 0.0) to capture all CVEs, then use frontend filtering for dynamic analysis.
 
 ---
 
@@ -294,17 +370,25 @@ Only CVEs with **CVSS ≥ 8.0** (High or Critical) are included in scan output.
 
 | Term | Definition |
 |------|------------|
-| **CVE** | Common Vulnerabilities and Exposures - standardized identifier for security vulnerabilities |
-| **GHSA** | GitHub Security Advisory - vulnerability database maintained by GitHub |
+| **CVE** | Common Vulnerabilities and Exposures - standardized identifier for security vulnerabilities (format: CVE-YYYY-NNNNN) |
+| **GHSA** | GitHub Security Advisory - vulnerability database maintained by GitHub (format: GHSA-xxxx-xxxx-xxxx) |
+| **GO** | Go ecosystem vulnerability identifier from OSV database (format: GO-YYYY-NNNN) |
+| **OSV** | Open Source Vulnerabilities - distributed vulnerability database for open source projects (api.osv.dev) |
 | **CVSS** | Common Vulnerability Scoring System - standard for assessing severity (0-10 scale) |
 | **SBOM** | Software Bill of Materials - comprehensive inventory of software components |
 | **VEX** | Vulnerability Exploitability eXchange - Red Hat's vulnerability metadata API |
 | **Grype** | Open-source vulnerability scanner for container images |
 | **Syft** | Open-source SBOM generation tool |
-| **NO-RH-VEX** | Marker indicating no Red Hat VEX data available for this CVE |
+| **NO-RH-VEX** | Marker indicating no Red Hat VEX data available for this CVE identifier |
+| **NO-GHSA** | Marker indicating no GitHub Security Advisory data available |
+| **NO-GO-VEX** | Marker indicating no OSV data available for this GO identifier |
 | **Freshness** | Age of container relative to RHOAI release (container-build-date - RELEASE_DATE) |
 | **IQR** | Interquartile Range - statistical measure of data spread (Q3 - Q1) |
 | **SHA** | Secure Hash Algorithm digest - unique identifier for container images |
+| **base-score** | CVSS base score from Grype vulnerability scanner |
+| **rel-base-score** | CVSS score from related vulnerabilities (e.g., when a CVE references other CVEs) |
+| **FIX_DATE** | Date when a fix became available (from Red Hat VEX or upstream sources) |
+| **DISCOVERY_DATE** | Date when the CVE was first discovered or published |
 
 ---
 
@@ -322,15 +406,27 @@ Dashboard data auto-refreshes every 5 minutes (300s TTL)
 
 ## 🚀 Running Scans
 
-To scan a new RHOAI release:
+To scan a new RHOAI release, **run from the project root directory**:
 
 ```bash
-cd scripts
-./rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION>
+# From project root (rhoai-thermometer/)
+./scripts/rh-summarize.sh <OCP_VERSION> <RHOAI_VERSION> [CVSS_THRESHOLD]
 
 # Examples:
-./rh-summarize.sh 4.18 2.19.0          # Scan with CVEs as of release date
-./rh-summarize.sh 4.18 2.19.0 today    # Scan with today's CVE database
+./scripts/rh-summarize.sh 4.18 2.19.0          # Default: CVSS ≥ 0.0 (no filtering)
+./scripts/rh-summarize.sh 4.18 2.19.0 0.0      # Explicit: include all CVEs (recommended)
+./scripts/rh-summarize.sh 4.18 2.19.0 8.0      # Only High/Critical CVEs (CVSS ≥ 8.0)
+./scripts/rh-summarize.sh 4.18 2.19.0 9.0      # Only Critical CVEs (CVSS ≥ 9.0)
 ```
+
+**Parameters:**
+- `OCP_VERSION` - OpenShift version (e.g., 4.18)
+- `RHOAI_VERSION` - RHOAI version to scan (e.g., 2.19.0)
+- `CVSS_THRESHOLD` - Optional minimum CVSS score (default: 0.0 = no filtering)
+
+**Important Notes:**
+- ⚠️ **Must run from project root** - script uses relative paths to `data/` and `rhoai-disconnected-install-helper/`
+- The script always scans using CVEs as they existed at the RHOAI release date (from `data/releases/rhoai-dates.csv`), not today's CVE database
+- Default threshold changed to 0.0 (no filtering) to allow frontend dynamic filtering
 
 Results will appear in `data/summary/` and be automatically picked up by the dashboard within 5 minutes.

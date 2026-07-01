@@ -29,7 +29,10 @@ The script:
 2. Retrieves the historical RHOAI image manifest from the disconnected-install-helper repo at the release date
 3. Generates SBOMs for each container image using Syft
 4. Scans SBOMs with Grype for vulnerabilities
-5. Enriches CVE data with Red Hat VEX metadata and GitHub Security Advisories
+5. Enriches vulnerability data from multiple sources:
+   - Red Hat VEX (for CVE-* identifiers)
+   - GitHub Security Advisories (for GHSA-* identifiers)  
+   - OSV API (for GO-* identifiers from Go ecosystem)
 6. Outputs consolidated TSV files in `data/summary/`
 
 ## Data Architecture
@@ -57,12 +60,14 @@ data/
       <cve-id>.json                 # Red Hat VEX data
     GHSA/
       <ghsa-id>.json                # GitHub Security Advisory data
+    GO/
+      <go-id>.json                  # OSV data for Go vulnerabilities
 ```
 
 ### TSV Schema
 
 Summary TSV files contain these columns (tab-separated):
-1. `id` — CVE or GHSA identifier
+1. `id` — Vulnerability identifier (CVE-*, GHSA-*, or GO-*)
 2. `severity` — Low/Medium/High/Critical
 3. `base-score` — CVSS base score from Grype
 4. `package` — Affected package name

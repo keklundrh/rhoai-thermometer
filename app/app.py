@@ -65,12 +65,27 @@ else:  # Severity
 
 st.sidebar.markdown("---")
 
-# Sidebar - View selector
+# Sidebar - View selector with URL parameter persistence
+view_options = ["Release View", "Time Series View", "Documentation"]
+
+# Get view from URL parameter if it exists
+default_view_index = 0
+if "view" in st.query_params:
+    url_view = st.query_params["view"]
+    if url_view in view_options:
+        default_view_index = view_options.index(url_view)
+
 view = st.sidebar.radio(
     "Select View",
-    ["Release View", "Time Series View", "Documentation"],
-    help="Choose between single release analysis, trends over time, or documentation"
+    view_options,
+    index=default_view_index,
+    help="Choose between single release analysis, trends over time, or documentation",
+    key="view_selector"
 )
+
+# Update URL parameter only when view changes
+if "view" not in st.query_params or st.query_params["view"] != view:
+    st.query_params["view"] = view
 
 # Load available releases
 releases = get_available_releases()
@@ -90,15 +105,28 @@ if view == "Release View":
     elif severity_filter:
         st.info(f"🔍 **Active Filter:** Severity = {', '.join(severity_filter)}")
 
-    # Release selector
+    # Release selector with URL parameter persistence
     release_options = {f"RHOAI {rhoai} (OCP {ocp})": (rhoai, ocp, path)
                       for rhoai, ocp, path in releases}
+
+    # Get release from URL parameter if it exists
+    default_release_index = 0
+    if "release" in st.query_params:
+        url_release = st.query_params["release"]
+        if url_release in release_options:
+            default_release_index = list(release_options.keys()).index(url_release)
 
     selected = st.selectbox(
         "Select RHOAI Release",
         options=list(release_options.keys()),
-        help="Choose a RHOAI release to analyze"
+        index=default_release_index,
+        help="Choose a RHOAI release to analyze",
+        key="release_selector"
     )
+
+    # Update URL parameter only when release changes
+    if "release" not in st.query_params or st.query_params["release"] != selected:
+        st.query_params["release"] = selected
 
     rhoai_ver, ocp_ver, filepath = release_options[selected]
 
@@ -164,15 +192,15 @@ if view == "Release View":
         st.metric(
             label="% CVEs with Fix at Release",
             value=f"{metrics['pct_with_fix']:.1f}%",
-            help="CVEs where a fix already existed at RHOAI release date (FIX_DATE <= RELEASE_DATE). This indicates fix availability, not necessarily deployment in RHOAI containers."
+            help="CVEs where a fix already existed at RHOAI release date (FIX_DATE <= RELEASE_DATE). A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems."
         )
         st.progress(metrics['pct_with_fix'] / 100)
 
     with col3:
         st.metric(
-            label="% with Fix Version Listed",
+            label="% with RH Fix Version",
             value=f"{metrics['pct_fix_version_listed']:.1f}%",
-            help=f"Of the {metrics['pct_with_fix']:.1f}% CVEs with fix at release, this percentage has the fix-version field populated in VEX data. This indicates Red Hat tracked a specific package version containing the fix, though deployment timing varies by product rebuild cycles."
+            help=f"Of the {metrics['pct_with_fix']:.1f}% CVEs with fix at release, this percentage has the fix-version field populated in VEX data. This indicates Red Hat tracked a specific package version containing the fix - applicability to specific build needs further investigation."
         )
         st.progress(metrics['pct_fix_version_listed'] / 100)
 
@@ -266,7 +294,7 @@ elif view == "Time Series View":
     elif severity_filter:
         st.info(f"🔍 **Active Filter:** Severity = {', '.join(severity_filter)}")
 
-    # Metric selector
+    # Metric selector with URL parameter persistence
     metric_options = {
         "Total CVEs at release": "total_cves",
         "Unique CVEs at release": "unique_cves",
@@ -279,11 +307,24 @@ elif view == "Time Series View":
         "Container Freshness (View 2)": "freshness_histogram"
     }
 
+    # Get metric from URL parameter if it exists
+    default_metric_index = 0
+    if "metric" in st.query_params:
+        url_metric = st.query_params["metric"]
+        if url_metric in metric_options:
+            default_metric_index = list(metric_options.keys()).index(url_metric)
+
     selected_metric_label = st.selectbox(
         "Select Metric to Plot",
         options=list(metric_options.keys()),
-        help="Choose which metric to visualize over time"
+        index=default_metric_index,
+        help="Choose which metric to visualize over time",
+        key="metric_selector"
     )
+
+    # Update URL parameter only when metric changes
+    if "metric" not in st.query_params or st.query_params["metric"] != selected_metric_label:
+        st.query_params["metric"] = selected_metric_label
 
     metric_col = metric_options[selected_metric_label]
 
@@ -375,6 +416,12 @@ elif view == "Time Series View":
 # ===== DOCUMENTATION VIEW =====
 else:  # view == "Documentation"
     st.header("📚 Documentation")
+
+    # AI-generated notice
+    st.warning(
+        "🤖 **AI-Generated Documentation** — This documentation was generated by AI based on the codebase. "
+        "It's *mostly* right, *probably*... but when in doubt, ask a human for details."
+    )
 
     # Load and display markdown documentation
     from pathlib import Path
