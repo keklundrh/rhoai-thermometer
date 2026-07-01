@@ -228,8 +228,8 @@ def compute_release_metrics(df: pd.DataFrame, cvss_threshold: float = None, seve
     # Total unique CVEs (count unique CVE IDs from filtered set)
     unique_cves = df_filtered['id'].nunique()
 
-    # Total unique containers (count unique SHAs from original df)
-    total_containers = df['SHA'].nunique()
+    # Total unique containers (count unique SHAs from FILTERED df - only containers with CVEs matching the filter)
+    total_containers = df_filtered['SHA'].nunique()
 
     # CVEs per container (using filtered CVEs, grouped by SHA for consistency)
     cves_per_container = df_filtered.groupby('SHA').size()
@@ -413,6 +413,7 @@ def get_time_series_data(cvss_threshold: float = None, severity_filter: tuple = 
             'unique_cves': metrics['unique_cves'],
             'total_containers': metrics['total_containers'],
             'avg_cves_per_container': metrics['avg_cves_per_container'],
+            'cves_with_fix_at_release': metrics['cves_with_fix_at_release'],
             'pct_no_fix': metrics['pct_no_fix'],
             'pct_with_fix': metrics['pct_with_fix'],
             'pct_fix_version_listed': metrics['pct_fix_version_listed']

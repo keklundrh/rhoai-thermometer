@@ -11,14 +11,43 @@ from utils import create_severity_chart, create_time_series_chart, create_freshn
 
 # Page configuration
 st.set_page_config(
-    page_title="RHOAI Thermometer",
-    page_icon="🌡️",
+    page_title="Red Hat OpenShift AI - Security Thermometer",
+    page_icon="🔴",
     layout="wide"
 )
 
-# Title
-st.title("🌡️ RHOAI Thermometer - CVEs at RELEASE Dashboard")
-st.markdown("Security vulnerability analysis for Red Hat OpenShift AI releases")
+# Red Hat brand colors
+RED_HAT_RED = "#EE0000"
+RED_HAT_DARK = "#151515"
+
+# Custom CSS for Red Hat branding
+st.markdown(f"""
+    <style>
+    /* Red Hat color accents */
+    .stMetric {{
+        background-color: #f8f8f8;
+        padding: 10px;
+        border-radius: 5px;
+        border-left: 4px solid {RED_HAT_RED};
+    }}
+    h1 {{
+        color: {RED_HAT_DARK};
+        border-bottom: 3px solid {RED_HAT_RED};
+        padding-bottom: 10px;
+    }}
+    h2 {{
+        color: {RED_HAT_DARK};
+        margin-top: 20px;
+    }}
+    .stProgress > div > div > div {{
+        background-color: {RED_HAT_RED};
+    }}
+    </style>
+    """, unsafe_allow_html=True)
+
+# Title with Red Hat branding
+st.title("🔴 Red Hat OpenShift AI - Security Thermometer")
+st.markdown("**CVE Vulnerability Analysis Dashboard** | Red Hat OpenShift AI Releases")
 
 # Sidebar - Filtering Section
 st.sidebar.header("🔍 Filters")
@@ -65,27 +94,31 @@ else:  # Severity
 
 st.sidebar.markdown("---")
 
-# Sidebar - View selector with URL parameter persistence
+# Sidebar - View selector
 view_options = ["Release View", "Time Series View", "Documentation"]
 
-# Get view from URL parameter if it exists
-default_view_index = 0
-if "view" in st.query_params:
-    url_view = st.query_params["view"]
-    if url_view in view_options:
-        default_view_index = view_options.index(url_view)
+# Initialize session state from query params on first load
+query_params = st.query_params
+if 'view' not in st.session_state:
+    default_view = query_params.get("view", "Release View")
+    if default_view not in view_options:
+        default_view = "Release View"
+    st.session_state.view = default_view
+
+current_index = view_options.index(st.session_state.view)
+
+def update_view():
+    st.session_state.view = st.session_state.view_radio
+    st.query_params["view"] = st.session_state.view
 
 view = st.sidebar.radio(
     "Select View",
     view_options,
-    index=default_view_index,
+    index=current_index,
     help="Choose between single release analysis, trends over time, or documentation",
-    key="view_selector"
+    key="view_radio",
+    on_change=update_view
 )
-
-# Update URL parameter only when view changes
-if "view" not in st.query_params or st.query_params["view"] != view:
-    st.query_params["view"] = view
 
 # Load available releases
 releases = get_available_releases()
@@ -97,36 +130,47 @@ if not releases:
 
 # ===== RELEASE VIEW =====
 if view == "Release View":
-    st.header("Release Analysis")
+    st.markdown(f"<h2 style='color: {RED_HAT_DARK};'>📊 Release Analysis</h2>", unsafe_allow_html=True)
 
-    # Show active filter
+    # Show active filter with Red Hat styling
     if cvss_threshold is not None:
-        st.info(f"🔍 **Active Filter:** CVSS Score ≥ {cvss_threshold}")
+        st.markdown(f"""
+            <div style='background-color: #fff5f5; border-left: 4px solid {RED_HAT_RED}; padding: 10px; margin-bottom: 20px; border-radius: 5px;'>
+                <strong style='color: {RED_HAT_RED};'>🔍 Active Filter:</strong> CVSS Score ≥ {cvss_threshold}
+            </div>
+        """, unsafe_allow_html=True)
     elif severity_filter:
-        st.info(f"🔍 **Active Filter:** Severity = {', '.join(severity_filter)}")
+        st.markdown(f"""
+            <div style='background-color: #fff5f5; border-left: 4px solid {RED_HAT_RED}; padding: 10px; margin-bottom: 20px; border-radius: 5px;'>
+                <strong style='color: {RED_HAT_RED};'>🔍 Active Filter:</strong> Severity = {', '.join(severity_filter)}
+            </div>
+        """, unsafe_allow_html=True)
 
-    # Release selector with URL parameter persistence
+    # Release selector
     release_options = {f"RHOAI {rhoai} (OCP {ocp})": (rhoai, ocp, path)
                       for rhoai, ocp, path in releases}
 
-    # Get release from URL parameter if it exists
-    default_release_index = 0
-    if "release" in st.query_params:
-        url_release = st.query_params["release"]
-        if url_release in release_options:
-            default_release_index = list(release_options.keys()).index(url_release)
+    # Initialize session state from query params on first load
+    if 'release' not in st.session_state:
+        default_release = query_params.get("release", list(release_options.keys())[0])
+        if default_release not in release_options:
+            default_release = list(release_options.keys())[0]
+        st.session_state.release = default_release
+
+    default_index = list(release_options.keys()).index(st.session_state.release)
+
+    def update_release():
+        st.session_state.release = st.session_state.release_selector
+        st.query_params["release"] = st.session_state.release
 
     selected = st.selectbox(
         "Select RHOAI Release",
         options=list(release_options.keys()),
-        index=default_release_index,
+        index=default_index,
         help="Choose a RHOAI release to analyze",
-        key="release_selector"
+        key="release_selector",
+        on_change=update_release
     )
-
-    # Update URL parameter only when release changes
-    if "release" not in st.query_params or st.query_params["release"] != selected:
-        st.query_params["release"] = selected
 
     rhoai_ver, ocp_ver, filepath = release_options[selected]
 
@@ -286,45 +330,57 @@ if view == "Release View":
 
 # ===== TIME SERIES VIEW =====
 elif view == "Time Series View":
-    st.header("Time Series Analysis")
+    st.markdown(f"<h2 style='color: {RED_HAT_DARK};'>📈 Time Series Analysis</h2>", unsafe_allow_html=True)
 
-    # Show active filter
+    # Show active filter with Red Hat styling
     if cvss_threshold is not None:
-        st.info(f"🔍 **Active Filter:** CVSS Score ≥ {cvss_threshold}")
+        st.markdown(f"""
+            <div style='background-color: #fff5f5; border-left: 4px solid {RED_HAT_RED}; padding: 10px; margin-bottom: 20px; border-radius: 5px;'>
+                <strong style='color: {RED_HAT_RED};'>🔍 Active Filter:</strong> CVSS Score ≥ {cvss_threshold}
+            </div>
+        """, unsafe_allow_html=True)
     elif severity_filter:
-        st.info(f"🔍 **Active Filter:** Severity = {', '.join(severity_filter)}")
+        st.markdown(f"""
+            <div style='background-color: #fff5f5; border-left: 4px solid {RED_HAT_RED}; padding: 10px; margin-bottom: 20px; border-radius: 5px;'>
+                <strong style='color: {RED_HAT_RED};'>🔍 Active Filter:</strong> Severity = {', '.join(severity_filter)}
+            </div>
+        """, unsafe_allow_html=True)
 
-    # Metric selector with URL parameter persistence
+    # Metric selector
     metric_options = {
-        "Total CVEs at release": "total_cves",
-        "Unique CVEs at release": "unique_cves",
+        "Total CVEs at Release": "total_cves",
+        "CVEs with RH Fix Available at Release": "cves_with_fix_at_release",
+        "Unique CVEs": "unique_cves",
         "Number of Containers with CVEs": "total_containers",
-        "Average CVEs per Container": "avg_cves_per_container",
-        "% CVEs with No Fix": "pct_no_fix",
-        "% CVEs with Fix": "pct_with_fix",
-        "% with Fix Version Listed": "pct_fix_version_listed",
+        "Avg CVEs per Container": "avg_cves_per_container",
+        "% CVEs with No Fix at Release": "pct_no_fix",
+        "% CVEs with Fix at Release": "pct_with_fix",
+        "% with RH Fix Version": "pct_fix_version_listed",
         "Container Freshness (View 1)": "freshness_monthly",
         "Container Freshness (View 2)": "freshness_histogram"
     }
 
-    # Get metric from URL parameter if it exists
-    default_metric_index = 0
-    if "metric" in st.query_params:
-        url_metric = st.query_params["metric"]
-        if url_metric in metric_options:
-            default_metric_index = list(metric_options.keys()).index(url_metric)
+    # Initialize session state from query params on first load
+    if 'metric' not in st.session_state:
+        default_metric = query_params.get("metric", list(metric_options.keys())[0])
+        if default_metric not in metric_options:
+            default_metric = list(metric_options.keys())[0]
+        st.session_state.metric = default_metric
+
+    default_metric_index = list(metric_options.keys()).index(st.session_state.metric)
+
+    def update_metric():
+        st.session_state.metric = st.session_state.metric_selector
+        st.query_params["metric"] = st.session_state.metric
 
     selected_metric_label = st.selectbox(
         "Select Metric to Plot",
         options=list(metric_options.keys()),
         index=default_metric_index,
         help="Choose which metric to visualize over time",
-        key="metric_selector"
+        key="metric_selector",
+        on_change=update_metric
     )
-
-    # Update URL parameter only when metric changes
-    if "metric" not in st.query_params or st.query_params["metric"] != selected_metric_label:
-        st.query_params["metric"] = selected_metric_label
 
     metric_col = metric_options[selected_metric_label]
 
@@ -415,7 +471,7 @@ elif view == "Time Series View":
 
 # ===== DOCUMENTATION VIEW =====
 else:  # view == "Documentation"
-    st.header("📚 Documentation")
+    st.markdown(f"<h2 style='color: {RED_HAT_DARK};'>📚 Documentation</h2>", unsafe_allow_html=True)
 
     # AI-generated notice
     st.warning(
@@ -435,10 +491,13 @@ else:  # view == "Documentation"
         st.info("Please ensure DOCUMENTATION.md exists in the app directory.")
 
 
-# Footer
+# Footer with Red Hat branding
 st.sidebar.markdown("---")
-st.sidebar.info(
-    "**RHOAI Thermometer**\n\n"
-    f"Analyzing {len(releases)} RHOAI releases\n\n"
-    "Data auto-refreshes every 5 minutes"
-)
+st.sidebar.markdown(f"""
+    <div style='text-align: center; padding: 10px;'>
+        <p style='color: {RED_HAT_RED}; font-weight: bold; font-size: 16px; margin-bottom: 5px;'>Red Hat OpenShift AI</p>
+        <p style='color: {RED_HAT_DARK}; font-size: 14px; margin-bottom: 5px;'>Security Thermometer</p>
+        <p style='color: #666; font-size: 12px; margin-bottom: 3px;'>Analyzing {len(releases)} RHOAI releases</p>
+        <p style='color: #666; font-size: 11px;'>Data auto-refreshes every 5 minutes</p>
+    </div>
+    """, unsafe_allow_html=True)
