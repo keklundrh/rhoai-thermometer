@@ -309,7 +309,19 @@ git fetch origin
 git checkout main 
 git reset --hard origin/main
 
-IMAGES=$(git show "$(git rev-list -n 1 --before="$SCAN_DATE" main)":rhoai-$VER.md | grep -oE '[a-z0-9.-]+(\.[a-z]{2,})?/[^ ]+@sha256:[a-f0-9]{64}' | grep -v -E 'rhods-operator|stable|fast')
+# Extract images from disconnected-install-helper, excluding unsupported ones
+# Step 1: Get list of unsupported SHA256 hashes
+UNSUPPORTED_SHAS=$(git show "$(git rev-list -n 1 --before="$SCAN_DATE" main)":rhoai-$VER.md | sed -n '/^# Unsupported Images:/,/^#/p' | grep -oE 'sha256:[a-f0-9]{64}' | sort -u)
+
+# Step 2: Extract all images, then filter out unsupported SHAs
+if [ -n "$UNSUPPORTED_SHAS" ]; then
+    # Build grep pattern to exclude unsupported SHAs
+    EXCLUDE_PATTERN=$(echo "$UNSUPPORTED_SHAS" | tr '\n' '|' | sed 's/|$//')
+    IMAGES=$(git show "$(git rev-list -n 1 --before="$SCAN_DATE" main)":rhoai-$VER.md | grep -oE '[a-z0-9.-]+(\.[a-z]{2,})?/[^ ]+@sha256:[a-f0-9]{64}' | grep -v -E 'rhods-operator|stable|fast' | grep -vE "$EXCLUDE_PATTERN")
+else
+    # No unsupported section, extract all images normally
+    IMAGES=$(git show "$(git rev-list -n 1 --before="$SCAN_DATE" main)":rhoai-$VER.md | grep -oE '[a-z0-9.-]+(\.[a-z]{2,})?/[^ ]+@sha256:[a-f0-9]{64}' | grep -v -E 'rhods-operator|stable|fast')
+fi
 cd $BASE_DIR
 
 #IMAGES=$(grep name rhoai-disconnected-install-helper/rhoai-$VER.md | cut -f 2,3 -d: | grep -v -E 'rhods-operator|stable|fast')

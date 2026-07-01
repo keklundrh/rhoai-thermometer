@@ -1,6 +1,8 @@
 ## Overview
 
-**RHOAI Thermometer** is a security analytics tool that scans Red Hat OpenShift AI (RHOAI) container images for CVE vulnerabilities. It generates time-series vulnerability data by scanning images from specific RHOAI releases as they existed at release time, enabling trend analysis and security posture tracking.
+**RHOAI Thermometer** is a security analytics tool that scans Red Hat OpenShift AI (RHOAI) container images for CVE vulnerabilities. It generates time-series vulnerability data by scanning **supported images only** from specific RHOAI releases as they existed at release time, enabling trend analysis and security posture tracking.
+
+**Important:** Only **officially supported** RHOAI container images are scanned. Images marked as "Unsupported" or deprecated in the disconnected-install-helper repository are automatically excluded from analysis.
 
 ---
 
@@ -12,13 +14,14 @@ The scanning process (`scripts/rh-summarize.sh`) performs the following steps:
 
 1. **Fetch Image List** - Retrieves container image list from Red Hat operator catalog for the specified OCP version
 2. **Historical Manifest** - Uses `git` to retrieve the RHOAI image manifest from the [disconnected-install-helper](https://github.com/red-hat-data-services/rhoai-disconnected-install-helper) repo as **it existed at the release date**
-3. **Generate SBOMs** - Creates Software Bill of Materials for each container image using **Syft**
-4. **Scan for Vulnerabilities** - Scans SBOMs with **Grype** to identify CVEs
-5. **Enrich CVE Data** - Fetches metadata from:
+3. **Filter Unsupported Images** - Automatically excludes images marked as "Unsupported" in the disconnected-install-helper repository. **Only officially supported RHOAI images are scanned.**
+4. **Generate SBOMs** - Creates Software Bill of Materials for each container image using **Syft**
+5. **Scan for Vulnerabilities** - Scans SBOMs with **Grype** to identify CVEs
+6. **Enrich CVE Data** - Fetches metadata from:
    - Red Hat VEX (Vulnerability Exploitability eXchange) API
    - GitHub Security Advisories
-6. **Output** - Generates consolidated TSV files in `data/summary/`
-7. **Removes CVES < 8.0** - Including only CVEs with CVSS or related score greater than or equal to 8.0 (following process from two large Red Hat customers)  
+7. **Output** - Generates consolidated TSV files in `data/summary/`
+8. **Removes CVES < 8.0** - Including only CVEs with CVSS or related score greater than or equal to 8.0 (following process from two large Red Hat customers)  
 
 **Key Tools:**
 - `syft` - SBOM generation
@@ -88,8 +91,8 @@ Summary TSV files (`data/summary/*.tsv`) contain these tab-separated columns:
 |--------|-------------|---------|
 | **Total CVEs at Release** | Count of rows where `DISCOVERY_DATE <= RELEASE_DATE` | High/critical CVEs that existed when RHOAI was released. Excludes `NO-RH-VEX` entries. |
 | **Unique CVEs** | Count of distinct `id` values (from filtered set) | Number of distinct vulnerabilities. Same CVE may appear in multiple containers. |
-| **Total Containers** | Count of distinct `SHA` values | Number of unique container images scanned in this release. |
-| **Avg CVEs per Container** | Mean of CVEs grouped by `IMAGE` | Average vulnerability count per container. |
+| **Number of Containers with CVEs** | Count of distinct `SHA` values with CVEs | Number of unique container images that have at least one CVE. Note: Containers with 0 CVEs are not included in summary files. |
+| **Avg CVEs per Container** | Mean of CVEs grouped by `IMAGE` | Average vulnerability count per container (only containers with CVEs). |
 
 ### Fix Availability Metrics
 
@@ -166,8 +169,8 @@ Select a metric from the dropdown to visualize trends across RHOAI releases.
 |--------|-----------------|-------------|
 | **Total CVEs** | Automatic | Total high/critical CVEs discovered at or before each release |
 | **Unique CVEs** | Automatic | Count of distinct CVE IDs per release |
-| **Total Containers** | Automatic | Number of unique container images per release |
-| **Average CVEs per Container** | Automatic | Mean CVE count across containers |
+| **Number of Containers with CVEs** | Automatic | Number of unique container images with at least one CVE |
+| **Average CVEs per Container** | Automatic | Mean CVE count across containers (only containers with CVEs) |
 | **% CVEs with No Fix** | Consistent (shared) | Percentage of CVEs without fixes available in RH ecosystem at release time |
 | **% CVEs with Fix** | Consistent (shared) | Percentage of CVEs with fixes available in RH ecosystem at release time |
 | **% with Fix Version Listed** | Consistent (shared) | Percentage of CVEs with fix version tracked in VEX data |

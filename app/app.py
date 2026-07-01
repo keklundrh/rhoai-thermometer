@@ -136,9 +136,9 @@ if view == "Release View":
 
     with col4:
         st.metric(
-            label="Total Containers",
+            label="Number of Containers with CVEs",
             value=f"{metrics['total_containers']:,}",
-            help="Number of unique container images scanned"
+            help="Number of unique container images with at least one CVE"
         )
 
     with col5:
@@ -156,7 +156,7 @@ if view == "Release View":
         st.metric(
             label="% CVEs with No Fix at Release",
             value=f"{metrics['pct_no_fix']:.1f}%",
-            help="CVEs where no fix existed anywhere in the Red Hat ecosystem at RHOAI release date (FIX_DATE > RELEASE_DATE or NO-RH-VEX)"
+            help="CVEs where no fix existed at RHOAI release date (FIX_DATE > RELEASE_DATE or NO-RH-VEX)"
         )
         st.progress(metrics['pct_no_fix'] / 100)
 
@@ -164,7 +164,7 @@ if view == "Release View":
         st.metric(
             label="% CVEs with Fix at Release",
             value=f"{metrics['pct_with_fix']:.1f}%",
-            help="CVEs where a fix already existed somewhere in the Red Hat ecosystem at RHOAI release date (FIX_DATE <= RELEASE_DATE). This indicates fix availability, not necessarily deployment in RHOAI containers."
+            help="CVEs where a fix already existed at RHOAI release date (FIX_DATE <= RELEASE_DATE). This indicates fix availability, not necessarily deployment in RHOAI containers."
         )
         st.progress(metrics['pct_with_fix'] / 100)
 
@@ -270,7 +270,7 @@ elif view == "Time Series View":
     metric_options = {
         "Total CVEs at release": "total_cves",
         "Unique CVEs at release": "unique_cves",
-        "Total Containers": "total_containers",
+        "Number of Containers with CVEs": "total_containers",
         "Average CVEs per Container": "avg_cves_per_container",
         "% CVEs with No Fix": "pct_no_fix",
         "% CVEs with Fix": "pct_with_fix",
