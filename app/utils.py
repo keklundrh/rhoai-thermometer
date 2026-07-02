@@ -350,15 +350,31 @@ def create_freshness_stacked_chart(freshness_data_by_release: dict, release_date
                 hovertemplate=f'<b>RHOAI {release}</b><br>Month: %{{x|%Y-%m}}<br>Containers: %{{y}}<extra></extra>'
             ))
 
-    # Add vertical lines for each RHOAI release date
+    # Add vertical lines for each RHOAI release date using shapes (more compatible)
     for idx, (release, release_date) in enumerate(release_dates.items()):
-        fig.add_vline(
+        fig.add_shape(
+            type="line",
+            x0=release_date,
+            x1=release_date,
+            y0=0,
+            y1=1,
+            yref="paper",
+            line=dict(
+                color=colors[idx % len(colors)],
+                width=2,
+                dash="dash"
+            )
+        )
+        # Add annotation separately
+        fig.add_annotation(
             x=release_date,
-            line_dash="dash",
-            line_color=colors[idx % len(colors)],
-            annotation_text=f"RHOAI {release}",
-            annotation_position="top",
-            annotation_textangle=-90
+            y=1,
+            yref="paper",
+            text=f"RHOAI {release}",
+            showarrow=False,
+            textangle=-90,
+            yanchor="bottom",
+            font=dict(color=colors[idx % len(colors)])
         )
 
     fig.update_layout(
@@ -376,9 +392,49 @@ def create_freshness_stacked_chart(freshness_data_by_release: dict, release_date
             x=0.01
         ),
         xaxis=dict(
-            tickformat='%Y-%m',
-            dtick='M3'  # Show tick every 3 months
+            tickformat='%Y-%m'
         )
+    )
+
+    return fig
+
+
+def create_freshness_score_chart(freshness_buckets: dict) -> go.Figure:
+    """
+    Create a bar chart showing container age distribution by freshness buckets.
+
+    Args:
+        freshness_buckets: Dict with keys 'excellent', 'good', 'fair', 'stale' and container counts
+
+    Returns:
+        Plotly Figure object
+    """
+    categories = ['Excellent\n(0-3mo)', 'Good\n(3-6mo)', 'Fair\n(6-12mo)', 'Stale\n(12+mo)']
+    values = [
+        freshness_buckets['excellent'],
+        freshness_buckets['good'],
+        freshness_buckets['fair'],
+        freshness_buckets['stale']
+    ]
+    colors = ['#00CC66', '#FFD700', '#FFA500', '#FF4444']  # Green, Gold, Orange, Red
+
+    fig = go.Figure(data=[
+        go.Bar(
+            x=categories,
+            y=values,
+            marker_color=colors,
+            text=values,
+            textposition='auto',
+            hovertemplate='<b>%{x}</b><br>Containers: %{y}<extra></extra>'
+        )
+    ])
+
+    fig.update_layout(
+        title="Container Age Distribution at Release",
+        xaxis_title="Container Age Category",
+        yaxis_title="Number of Containers",
+        height=400,
+        showlegend=False
     )
 
     return fig

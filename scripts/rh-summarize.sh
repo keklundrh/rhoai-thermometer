@@ -113,18 +113,18 @@ fn_cve_summary () {
 }
 
 fn_download_vex() {
-    local CVE=$1 
+    local CVE=$1
 
     # standard CVE, get RH VEX
-    if [[ "$CVE" == CVE-* ]]; then 
+    if [[ "$CVE" == CVE-* ]]; then
         YEAR=$(echo $CVE | cut -d- -f2)
-        CVE_LOW=$(printf '%s' "$CVE" | tr '[:upper:]' '[:lower:]') 
+        CVE_LOW=$(printf '%s' "$CVE" | tr '[:upper:]' '[:lower:]')
 
         mkdir -p $VEX_DIR/$YEAR
         if [ ! -s $VEX_DIR/$YEAR/$CVE_LOW.json ] || [ $VEX_DIR/$YEAR/$CVE_LOW.json -ot $CUTOFF_FILE ]; then
-            curl -s -o $VEX_DIR/$YEAR/$CVE_LOW.json $VEX_URL/$YEAR/$CVE_LOW.json 
+            curl -s -o $VEX_DIR/$YEAR/$CVE_LOW.json $VEX_URL/$YEAR/$CVE_LOW.json
         fi
-    elif [[ "$CVE" == GHSA-* ]]; then 
+    elif [[ "$CVE" == GHSA-* ]]; then
         mkdir -p $VEX_DIR/GHSA
 
         if [ ! -s $VEX_DIR/GHSA/$CVE.json ] || [ $VEX_DIR/GHSA/$CVE.json -ot $CUTOFF_FILE ]; then
@@ -136,9 +136,9 @@ fn_download_vex() {
         fi
 
         CVE_TMP=$(cat $VEX_DIR/GHSA/$CVE.json | jq -r '.cve_id // "NO-GHSA"')
-        if [ "$CVE_TMP" != "NO-GHSA" ] && [ "$CVE_TMP" != "null" ]; then 
+        if [ "$CVE_TMP" != "NO-GHSA" ] && [ "$CVE_TMP" != "null" ]; then
             YEAR=$(echo $CVE_TMP | cut -d- -f2)
-            CVE_LOW=$(printf '%s' "$CVE_TMP" | tr '[:upper:]' '[:lower:]') 
+            CVE_LOW=$(printf '%s' "$CVE_TMP" | tr '[:upper:]' '[:lower:]')
 
             mkdir -p $VEX_DIR/$YEAR
             if [ ! -s $VEX_DIR/$YEAR/$CVE_LOW.json ] || [ $VEX_DIR/$YEAR/$CVE_LOW.json -ot $CUTOFF_FILE ]; then

@@ -144,7 +144,7 @@ Summary TSV files (`data/summary/*.tsv`) contain these tab-separated columns:
 
 | Metric | Calculation | Meaning |
 |--------|-------------|---------|
-| **CVEs with RH Fix Available at Release** | Count where `FIX_DATE <= RELEASE_DATE AND fix-version != 'None'` | CVEs where a fix existed somewhere in Red Hat's product ecosystem at the RHOAI release date. For base system packages (libxml2, openssl, krb5), this typically means the fix was available in RHEL and *could* have been pulled into RHOAI containers during rebuild. For application-level dependencies (Go/Python libraries), each product manages versions independently. |
+| **CVEs with Fix Available at Release** | Count where `FIX_DATE <= RELEASE_DATE` | CVEs where a fix existed at the RHOAI release date. A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems. This indicates fix **availability**, not necessarily fix **deployment** in RHOAI containers. |
 | **% CVEs with No Fix at Release** | `(FIX_DATE > RELEASE_DATE OR FIX_DATE = 'NO-RH-VEX') / total_cves * 100` | Percentage of CVEs where no fix existed when RHOAI was released. |
 | **% CVEs with Fix at Release** | `100 - % No Fix` | Percentage of CVEs where a fix already existed at RHOAI release date. A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems. This indicates fix **availability**, not necessarily fix **deployment** in RHOAI containers. |
 | **% with RH Fix Version** | `(FIX_DATE <= RELEASE_DATE AND fix-version != 'None') / cves_with_fix * 100` | Of CVEs with fix at release, percentage that have the fix-version field populated in Red Hat VEX data. This indicates Red Hat tracked which package version contains the fix - applicability to specific build needs further investigation. |
@@ -155,7 +155,7 @@ These three metrics work together to provide a complete picture of fix status:
 
 1. **% CVEs with Fix at Release** - Broadest measure: indicates a fix existed *somewhere* (Red Hat, upstream, or other ecosystems)
 2. **% with RH Fix Version** - Subset of #1: indicates Red Hat specifically tracked a fix version in their VEX data
-3. **CVEs with RH Fix Available at Release** - Raw count version of #2
+3. **CVEs with Fix Available at Release** - Raw count version of #2
 
 **Relationship:**
 ```
@@ -209,7 +209,25 @@ Gap: 17 days between availability and deployment
 - Horizontal bar chart showing breakdown by severity level
 - Color coded: Critical (red), High (orange), Medium (yellow), Low (blue)
 
-**Container Freshness**
+**Container Freshness Score** (Release View)
+- Percentage of containers built within 3 months of release date
+- **Calculation:** `freshness_score = (containers aged 0-90 days / total containers) × 100`
+- **Container age:** `RELEASE_DATE - container-build-date` (positive = built before release)
+- **Age buckets:**
+  - **Excellent (0-3 months):** 0-90 days old at release
+  - **Good (3-6 months):** 91-180 days old at release
+  - **Fair (6-12 months):** 181-365 days old at release
+  - **Stale (12+ months):** 365+ days old at release
+- **Impact:** Freshness reduces CVE accumulation from aging dependencies
+  - Example: Stale containers (12+mo) in RHOAI 2.13 had ~280 CVEs vs ~120 in fresh RHOAI 3.x containers
+  - **However:** Total CVE count depends on BOTH freshness AND base image security at build time
+  - Fresh containers built from vulnerable base images can still have high CVE counts
+- **Industry standard:** 3-month threshold aligns with quarterly rebuild cycles
+- **Interpretation:** 
+  - 90%+ score indicates excellent rebuild cadence
+  - Combine with total CVE trends to assess overall security posture
+
+**Container Freshness Histogram** (Release View)
 - Histogram of container ages relative to RHOAI release
 - **Calculation:** `freshness_days = container-build-date - RELEASE_DATE`
 - **Negative values** (left) = containers built BEFORE release (older/stale)
@@ -233,56 +251,49 @@ Select a metric from the dropdown to visualize trends across RHOAI releases.
 
 | Metric | Y-Axis Behavior | Description |
 |--------|-----------------|-------------|
-| **Total CVEs** | Automatic | Total high/critical CVEs discovered at or before each release |
+| **Total CVEs at Release** | Automatic | Total high/critical CVEs discovered at or before each release |
+| **CVEs with Fix Available at Release** | Automatic | Count of CVEs where a fix existed at release date |
 | **Unique CVEs** | Automatic | Count of distinct CVE IDs per release |
 | **Number of Containers with CVEs** | Automatic | Number of unique container images with at least one CVE |
-| **Average CVEs per Container** | Automatic | Mean CVE count across containers (only containers with CVEs) |
-| **% CVEs with No Fix** | Consistent (shared) | Percentage of CVEs without fixes available at release time |
-| **% CVEs with Fix** | Consistent (shared) | Percentage of CVEs with fixes available at release time (may or may not be through Red Hat) |
+| **Avg CVEs per Container** | Automatic | Mean CVE count across containers (only containers with CVEs) |
+| **% CVEs with No Fix at Release** | Consistent (shared) | Percentage of CVEs without fixes available at release time |
+| **% CVEs with Fix at Release** | Consistent (shared) | Percentage of CVEs with fixes available at release time (may or may not be through Red Hat) |
 | **% with RH Fix Version** | Consistent (shared) | Percentage of CVEs with fix version tracked in Red Hat VEX data |
-| **Container Freshness (View 1)** | Monthly bins | Container build dates binned by calendar month, stacked by release |
-| **Container Freshness (View 2)** | Days histogram | Container freshness in days from release, stacked histogram by release |
+| **Container Freshness Score** | Consistent (shared) | Percentage of containers built within 3 months of release (0-90 days old) |
 
 **Y-Axis Consistency:**
-- Percentage metrics share the same Y-axis range for easy comparison
+- Percentage metrics share the same Y-axis range for easy comparison across metrics
 - Numeric metrics use automatic scaling due to magnitude differences
 
-### Container Freshness Views (Time Series)
+### Container Freshness Score Trends (Time Series)
 
-Two views are available to analyze container freshness:
+Shows the percentage of "Excellent" containers (0-3 months old) across RHOAI releases.
 
-#### View 1: Monthly Build Dates
+**Chart Type:** Line chart
 
-**Chart Type:** Stacked bar chart
+**X-Axis:** RHOAI version (e.g., 2.13, 2.16, 3.0, 3.2, 3.3, 3.4)
 
-**X-Axis:** Calendar months (YYYY-MM format)
-- Each bar represents one month
-- Bars are stacked by RHOAI release version
+**Y-Axis:** Percentage of containers in "Excellent" category (0-90 days old at release)
 
-**Vertical Lines:** Dashed lines mark each RHOAI release date
-- Color-coded to match that release's bars
-- Labels rotated -90° to avoid overlap
+**What It Reveals:**
+- **Upward trend** = Container rebuild practices improving
+- **Score ≥90%** = Excellent container hygiene (minimal technical debt)
+- **Score 60-89%** = Good, but room for improvement
+- **Score <60%** = Many stale containers, high CVE accumulation risk
 
-**Interpretation:**
-- Bars to the **left** of a release line = containers built BEFORE that release
-- Bars to the **right** of a release line = containers built AFTER that release
-- Helps identify if releases are using fresh or stale container builds
+**Key Findings:**
+- RHOAI 2.x releases: 42-63% freshness (moderate)
+- RHOAI 3.0: 59% (last release with significant stale containers)
+- RHOAI 3.2: 72% (major improvement)
+- RHOAI 3.3+: 89-94% (excellent, nearly all fresh containers)
 
-#### View 2: Freshness Distribution (Days)
-
-**Chart Type:** Stacked histogram
-
-**X-Axis:** Days from release (container-build-date - RELEASE_DATE)
-- Negative values = containers built BEFORE release (left side)
-- Positive values = containers built AFTER release (right side)
-- Bins show distribution of freshness across all releases
-
-**Red Vertical Line:** Marks the release date (x=0)
-
-**Interpretation:**
-- Each colored layer = one RHOAI release
-- Shows how many days before/after release containers were built
-- Helps identify trends in container age at release time
+**Why This Matters:**
+- Fresh containers (0-3mo) average ~120 CVEs in RHOAI 3.x
+- Stale containers (12+mo) average ~280 CVEs in RHOAI 2.x (2.3x more)
+- Freshness **reduces CVE accumulation** from aging dependencies
+- **Important limitation:** Freshness alone doesn't eliminate CVEs - total count also depends on the security posture of base images at build time
+- **Best practice:** Combine frequent rebuilds (high freshness) with patched base images
+- The 3-month threshold aligns with industry best practices (quarterly rebuild cycles)
 
 ---
 

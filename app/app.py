@@ -5,13 +5,13 @@ A Streamlit dashboard for analyzing CVE vulnerabilities in RHOAI container image
 
 import streamlit as st
 import pandas as pd
-from data_loader import get_available_releases, load_release_data, compute_release_metrics, get_time_series_data, get_freshness_data_by_release, get_freshness_histogram_data, get_min_cvss_score
-from utils import create_severity_chart, create_time_series_chart, create_freshness_chart, create_freshness_stacked_chart, create_freshness_histogram_stacked
+from data_loader import get_available_releases, load_release_data, compute_release_metrics, get_time_series_data, get_min_cvss_score
+from utils import create_severity_chart, create_time_series_chart, create_freshness_chart, create_freshness_score_chart
 
 
 # Page configuration
 st.set_page_config(
-    page_title="Red Hat OpenShift AI - Security Thermometer",
+    page_title="Red Hat OpenShift AI - CVE Thermometer",
     page_icon="🔴",
     layout="wide"
 )
@@ -39,14 +39,24 @@ st.markdown(f"""
         color: {RED_HAT_DARK};
         margin-top: 20px;
     }}
-    .stProgress > div > div > div {{
-        background-color: {RED_HAT_RED};
+    /* Progress bar - try multiple selectors for different Streamlit versions */
+    .stProgress > div > div > div > div,
+    .stProgress > div > div > div,
+    [data-testid="stProgress"] > div > div > div > div,
+    [data-testid="stProgress"] > div > div > div {{
+        background-color: #0066CC !important;
+    }}
+    .stProgress > div > div,
+    .stProgress > div,
+    [data-testid="stProgress"] > div > div,
+    [data-testid="stProgress"] > div {{
+        background-color: #E8E8E8 !important;
     }}
     </style>
     """, unsafe_allow_html=True)
 
 # Title with Red Hat branding
-st.title("🔴 Red Hat OpenShift AI - Security Thermometer")
+st.title("🔴 Red Hat OpenShift AI - CVE Thermometer")
 st.markdown("**CVE Vulnerability Analysis Dashboard** | Red Hat OpenShift AI Releases")
 
 # Sidebar - Filtering Section
@@ -73,15 +83,6 @@ if filter_type == "CVSS Score":
         step=0.1,
         help=f"Include CVEs where base-score OR rel-base-score >= this value (data range: {min_cvss:.1f}-10.0)"
     )
-    # Allow text input override
-    cvss_text_input = st.sidebar.number_input(
-        "Or enter exact value",
-        min_value=min_cvss,
-        max_value=10.0,
-        value=cvss_threshold,
-        step=0.1
-    )
-    cvss_threshold = cvss_text_input
     severity_filter = None
 else:  # Severity
     severity_filter = st.sidebar.multiselect(
@@ -180,10 +181,11 @@ if view == "Release View":
         metrics = compute_release_metrics(df, cvss_threshold=cvss_threshold, severity_filter=severity_filter)
 
     # Display metrics
+    st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("Summary Metrics")
 
-    # Row 1: Count metrics
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # Row 1: Primary CVE metrics
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         st.metric(
@@ -194,9 +196,9 @@ if view == "Release View":
 
     with col2:
         st.metric(
-            label="CVEs with RH Fix Available at Release",
+            label="CVEs with Fix Available at Release",
             value=f"{metrics['cves_with_fix_at_release']:,}",
-            help="CVEs where a fix existed somewhere in the Red Hat ecosystem at release date (FIX_DATE <= RELEASE_DATE) with fix-version listed. Note: Fix availability doesn't guarantee the fix was deployed in RHOAI containers - that depends on container rebuild cycles."
+            help="CVEs where a fix existed at release date (FIX_DATE <= RELEASE_DATE). A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems. Note: Fix availability doesn't guarantee the fix was deployed in RHOAI containers - that depends on container rebuild cycles."
         )
 
     with col3:
@@ -206,21 +208,32 @@ if view == "Release View":
             help="Number of distinct CVE IDs (same CVE may appear in multiple containers)"
         )
 
-    with col4:
+    # Row 2: Container metrics
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
         st.metric(
             label="Number of Containers with CVEs",
             value=f"{metrics['total_containers']:,}",
             help="Number of unique container images with at least one CVE"
         )
 
-    with col5:
+    with col2:
         st.metric(
             label="Avg CVEs per Container",
             value=f"{metrics['avg_cves_per_container']:.1f}",
             help="Mean number of CVEs across all containers"
         )
 
+    with col3:
+        st.metric(
+            label="Container Freshness Score",
+            value=f"{metrics['freshness_score']:.0f}%",
+            help="Percentage of containers built within 3 months of release date. Fresh containers (0-3 months old) have significantly fewer CVEs than stale containers (12+ months old)."
+        )
+
     # Row 2: Fix status metrics AT RELEASE TIME
+    st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("Fix Availability at Release")
     col1, col2, col3 = st.columns(3)
 
@@ -230,7 +243,11 @@ if view == "Release View":
             value=f"{metrics['pct_no_fix']:.1f}%",
             help="CVEs where no fix existed at RHOAI release date (FIX_DATE > RELEASE_DATE or NO-RH-VEX)"
         )
-        st.progress(metrics['pct_no_fix'] / 100)
+        st.markdown(f"""
+            <div style="width: 100%; background-color: #E8E8E8; border-radius: 4px; height: 8px;">
+                <div style="width: {metrics['pct_no_fix']:.1f}%; background-color: #0066CC; border-radius: 4px; height: 8px;"></div>
+            </div>
+        """, unsafe_allow_html=True)
 
     with col2:
         st.metric(
@@ -238,7 +255,11 @@ if view == "Release View":
             value=f"{metrics['pct_with_fix']:.1f}%",
             help="CVEs where a fix already existed at RHOAI release date (FIX_DATE <= RELEASE_DATE). A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems."
         )
-        st.progress(metrics['pct_with_fix'] / 100)
+        st.markdown(f"""
+            <div style="width: 100%; background-color: #E8E8E8; border-radius: 4px; height: 8px;">
+                <div style="width: {metrics['pct_with_fix']:.1f}%; background-color: #0066CC; border-radius: 4px; height: 8px;"></div>
+            </div>
+        """, unsafe_allow_html=True)
 
     with col3:
         st.metric(
@@ -246,10 +267,15 @@ if view == "Release View":
             value=f"{metrics['pct_fix_version_listed']:.1f}%",
             help=f"Of the {metrics['pct_with_fix']:.1f}% CVEs with fix at release, this percentage has the fix-version field populated in VEX data. This indicates Red Hat tracked a specific package version containing the fix - applicability to specific build needs further investigation."
         )
-        st.progress(metrics['pct_fix_version_listed'] / 100)
+        st.markdown(f"""
+            <div style="width: 100%; background-color: #E8E8E8; border-radius: 4px; height: 8px;">
+                <div style="width: {metrics['pct_fix_version_listed']:.1f}%; background-color: #0066CC; border-radius: 4px; height: 8px;"></div>
+            </div>
+        """, unsafe_allow_html=True)
 
-    # Charts
-    st.subheader("Distribution Analysis")
+    # CVE Distribution Analysis
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.subheader("CVE Distribution Analysis")
 
     col1, col2 = st.columns(2)
 
@@ -288,6 +314,24 @@ if view == "Release View":
         else:
             st.warning("No severity data available")
 
+    # Container Age Analysis
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.subheader("Container Age Analysis")
+
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        # Container Age Distribution chart
+        if sum(metrics['freshness_buckets'].values()) > 0:
+            fig_freshness_score = create_freshness_score_chart(metrics['freshness_buckets'])
+            st.plotly_chart(fig_freshness_score, use_container_width=True)
+        else:
+            st.warning("No freshness data available")
+
+    with col2:
+        # Placeholder for future content or leave empty
+        pass
+
     # Freshness chart (full width)
     if len(metrics['freshness_dist']) > 0:
         # Get release date from the dataframe
@@ -302,6 +346,7 @@ if view == "Release View":
         st.warning("No freshness data available")
 
     # Top Containers by CVE Count
+    st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("Top 5 Containers by CVE Count")
 
     if not metrics['top_containers'].empty:
@@ -349,15 +394,14 @@ elif view == "Time Series View":
     # Metric selector
     metric_options = {
         "Total CVEs at Release": "total_cves",
-        "CVEs with RH Fix Available at Release": "cves_with_fix_at_release",
+        "CVEs with Fix Available at Release": "cves_with_fix_at_release",
         "Unique CVEs": "unique_cves",
         "Number of Containers with CVEs": "total_containers",
         "Avg CVEs per Container": "avg_cves_per_container",
         "% CVEs with No Fix at Release": "pct_no_fix",
         "% CVEs with Fix at Release": "pct_with_fix",
         "% with RH Fix Version": "pct_fix_version_listed",
-        "Container Freshness (View 1)": "freshness_monthly",
-        "Container Freshness (View 2)": "freshness_histogram"
+        "Container Freshness Score": "freshness_score"
     }
 
     # Initialize session state from query params on first load
@@ -384,6 +428,23 @@ elif view == "Time Series View":
 
     metric_col = metric_options[selected_metric_label]
 
+    # Release range selector - get all versions first
+    all_release_versions = sorted([rhoai for rhoai, ocp, path in releases],
+                                   key=lambda x: tuple(map(int, x.split('.'))))
+
+    # Initialize session state for release range if not present
+    if 'min_release' not in st.session_state:
+        default_min_release = query_params.get("min_release", all_release_versions[0])
+        if default_min_release not in all_release_versions:
+            default_min_release = all_release_versions[0]
+        st.session_state.min_release = default_min_release
+
+    selected_min_release = st.session_state.min_release
+
+    # Helper function to convert version strings to tuples for comparison
+    def version_tuple(v):
+        return tuple(map(int, v.split('.')))
+
     # Load time series data (convert list to tuple for caching)
     with st.spinner("Loading time series data..."):
         severity_tuple = tuple(severity_filter) if severity_filter else None
@@ -393,9 +454,17 @@ elif view == "Time Series View":
         st.error("No time series data available")
         st.stop()
 
+    # Filter time series data by selected minimum release
+    min_version_tuple = version_tuple(selected_min_release)
+    ts_data = ts_data[ts_data['rhoai_version'].apply(lambda v: version_tuple(v) >= min_version_tuple)]
+
+    if ts_data.empty:
+        st.warning(f"No data available for releases >= {selected_min_release}")
+        st.stop()
+
     # Calculate consistent Y-axis ranges for percentage metrics only
     # Numeric metrics use automatic scaling due to large magnitude differences
-    percentage_metrics = ['pct_no_fix', 'pct_with_fix', 'pct_fix_version_listed']
+    percentage_metrics = ['pct_no_fix', 'pct_with_fix', 'pct_fix_version_listed', 'freshness_score']
 
     if metric_col in percentage_metrics:
         # Get min/max across all percentage metrics for consistent axis
@@ -406,46 +475,34 @@ elif view == "Time Series View":
         y_min = None
         y_max = None
 
-    # Display chart based on selected metric
-    if metric_col == "freshness_monthly":
-        # View 1: Monthly binned freshness with release markers
-        with st.spinner("Loading freshness data..."):
-            freshness_data, release_dates = get_freshness_data_by_release()
+    # Show time series chart (same for all metrics including freshness_score)
+    fig = create_time_series_chart(ts_data, metric_col, selected_metric_label, y_min, y_max)
+    st.plotly_chart(fig, use_container_width=True)
 
-        if freshness_data:
-            fig_freshness = create_freshness_stacked_chart(freshness_data, release_dates)
-            st.plotly_chart(fig_freshness, use_container_width=True)
-            st.info(
-                "📊 **View 1:** Container build dates are binned by month. "
-                "Vertical dashed lines show when each RHOAI release was published. "
-                "Bars to the left = containers built before release, bars to the right = containers built after release. "
-                "Each color represents a different RHOAI release version."
-            )
-        else:
-            st.warning("No freshness data available")
+    # Add explanation for freshness score
+    if metric_col == "freshness_score":
+        st.info(
+            "📊 **Container Freshness Score:** Percentage of containers built within 3 months of release date. "
+            "Freshness reduces CVE accumulation from aging dependencies, but total CVE count also depends on "
+            "the security posture of base images at build time. The most effective strategy combines frequent "
+            "rebuilds (high freshness) with patched base images."
+        )
 
-    elif metric_col == "freshness_histogram":
-        # View 2: Stacked histogram by freshness days
-        with st.spinner("Loading freshness data..."):
-            freshness_data = get_freshness_histogram_data()
+    # Release range slider (below the chart)
+    default_min_index = all_release_versions.index(st.session_state.min_release)
 
-        if freshness_data:
-            fig_freshness = create_freshness_histogram_stacked(freshness_data)
-            st.plotly_chart(fig_freshness, use_container_width=True)
-            st.info(
-                "📊 **View 2:** Stacked histogram showing container freshness in days. "
-                "Negative values (left) = containers built BEFORE release. "
-                "Positive values (right) = containers built AFTER release. "
-                "Red vertical line marks the release date. "
-                "Each color represents a different RHOAI release version."
-            )
-        else:
-            st.warning("No freshness data available")
+    def update_min_release():
+        st.session_state.min_release = st.session_state.min_release_slider
+        st.query_params["min_release"] = st.session_state.min_release
 
-    else:
-        # Show regular time series chart
-        fig = create_time_series_chart(ts_data, metric_col, selected_metric_label, y_min, y_max)
-        st.plotly_chart(fig, use_container_width=True)
+    st.select_slider(
+        "Show releases from:",
+        options=all_release_versions,
+        value=st.session_state.min_release,
+        help="Select the minimum RHOAI version to display. All releases from this version onwards will be shown.",
+        key="min_release_slider",
+        on_change=update_min_release
+    )
 
     # Show data table (only for non-freshness views)
     if metric_col not in ["freshness_monthly", "freshness_histogram"]:
@@ -496,7 +553,7 @@ st.sidebar.markdown("---")
 st.sidebar.markdown(f"""
     <div style='text-align: center; padding: 10px;'>
         <p style='color: {RED_HAT_RED}; font-weight: bold; font-size: 16px; margin-bottom: 5px;'>Red Hat OpenShift AI</p>
-        <p style='color: {RED_HAT_DARK}; font-size: 14px; margin-bottom: 5px;'>Security Thermometer</p>
+        <p style='color: {RED_HAT_DARK}; font-size: 14px; margin-bottom: 5px;'>CVE Thermometer</p>
         <p style='color: #666; font-size: 12px; margin-bottom: 3px;'>Analyzing {len(releases)} RHOAI releases</p>
         <p style='color: #666; font-size: 11px;'>Data auto-refreshes every 5 minutes</p>
     </div>
