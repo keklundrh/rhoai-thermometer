@@ -14,7 +14,13 @@ env/
 *.ipynb
 
 # Data files (large, generated)
-data/
+data/images
+data/notebooks
+data/releases/3.*
+data/releases/4.*
+data/releases/5.*
+data/summary
+data/vex
 
 # IDE
 .vscode/
@@ -32,3 +38,6 @@ Thumbs.db
 
 # External dependencies
 rhoai-disconnected-install-helper/
+
+# Environment
+.env
