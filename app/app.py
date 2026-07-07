@@ -191,21 +191,21 @@ if view == "Release View":
         st.metric(
             label="Total CVEs at Release",
             value=f"{metrics['total_cves']:,}",
-            help="High/critical CVEs discovered at or before RHOAI release (DISCOVERY_DATE <= RELEASE_DATE). Excludes NO-RH-VEX entries."
+            help="CVEs discovered at or before RHOAI release date (DISCOVERY_DATE <= RELEASE_DATE), matching the active filter. Excludes CVEs with unparseable discovery dates (e.g., NO-RH-VEX)."
         )
 
     with col2:
         st.metric(
             label="CVEs with Fix Available at Release",
             value=f"{metrics['cves_with_fix_at_release']:,}",
-            help="CVEs where a fix existed at release date (FIX_DATE <= RELEASE_DATE). A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems. Note: Fix availability doesn't guarantee the fix was deployed in RHOAI containers - that depends on container rebuild cycles."
+            help="Count of CVEs (discovered at or before release, matching active filter) where a fix existed at release date (FIX_DATE <= RELEASE_DATE). A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems. Note: Fix availability doesn't guarantee the fix was deployed in RHOAI containers - that depends on container rebuild cycles."
         )
 
     with col3:
         st.metric(
             label="Unique CVEs",
             value=f"{metrics['unique_cves']:,}",
-            help="Number of distinct CVE IDs (same CVE may appear in multiple containers)"
+            help="Number of distinct CVE IDs discovered at or before release, matching the active filter (same CVE may appear in multiple containers)"
         )
 
     # Row 2: Container metrics
@@ -215,21 +215,21 @@ if view == "Release View":
         st.metric(
             label="Number of Containers with CVEs",
             value=f"{metrics['total_containers']:,}",
-            help="Number of unique container images with at least one CVE"
+            help="Number of unique container images with at least one CVE discovered at or before release, matching the active filter"
         )
 
     with col2:
         st.metric(
             label="Avg CVEs per Container",
             value=f"{metrics['avg_cves_per_container']:.1f}",
-            help="Mean number of CVEs across all containers"
+            help="Mean number of CVEs (discovered at or before release, matching active filter) per container with at least one matching CVE"
         )
 
     with col3:
         st.metric(
             label="Container Freshness Score",
             value=f"{metrics['freshness_score']:.0f}%",
-            help="Percentage of containers built within 3 months of release date. Fresh containers (0-3 months old) have significantly fewer CVEs than stale containers (12+ months old)."
+            help="Percentage of ALL containers built within 3 months of release date. Fresh containers (0-3 months old) have significantly fewer CVEs than stale containers (12+ months old). Note: This metric reflects the full container set, independent of CVE filters and time constraints."
         )
 
     # Row 2: Fix status metrics AT RELEASE TIME
@@ -241,7 +241,7 @@ if view == "Release View":
         st.metric(
             label="% CVEs with No Fix at Release",
             value=f"{metrics['pct_no_fix']:.1f}%",
-            help="CVEs where no fix existed at RHOAI release date (FIX_DATE > RELEASE_DATE or NO-RH-VEX)"
+            help="Percentage of CVEs (discovered at or before release, matching active filter) where no fix existed at RHOAI release date (FIX_DATE > RELEASE_DATE, NO-RH-VEX, or NOT-FOUND in FIX_DATE field)"
         )
         st.markdown(f"""
             <div style="width: 100%; background-color: #E8E8E8; border-radius: 4px; height: 8px;">
@@ -253,7 +253,7 @@ if view == "Release View":
         st.metric(
             label="% CVEs with Fix at Release",
             value=f"{metrics['pct_with_fix']:.1f}%",
-            help="CVEs where a fix already existed at RHOAI release date (FIX_DATE <= RELEASE_DATE). A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems."
+            help="Percentage of CVEs (discovered at or before release, matching active filter) where a fix already existed at RHOAI release date (FIX_DATE <= RELEASE_DATE). A fix is available but may or may not be available through Red Hat - it could be upstream or in other ecosystems."
         )
         st.markdown(f"""
             <div style="width: 100%; background-color: #E8E8E8; border-radius: 4px; height: 8px;">
@@ -265,7 +265,7 @@ if view == "Release View":
         st.metric(
             label="% with RH Fix Version",
             value=f"{metrics['pct_fix_version_listed']:.1f}%",
-            help=f"Of the {metrics['pct_with_fix']:.1f}% CVEs with fix at release, this percentage has the fix-version field populated in VEX data. This indicates Red Hat tracked a specific package version containing the fix - applicability to specific build needs further investigation."
+            help=f"Of the {metrics['pct_with_fix']:.1f}% CVEs (discovered at or before release, matching active filter) with fix at release, this percentage has the fix-version field populated in VEX data. This indicates Red Hat tracked a specific package version containing the fix - applicability to specific build needs further investigation."
         )
         st.markdown(f"""
             <div style="width: 100%; background-color: #E8E8E8; border-radius: 4px; height: 8px;">
@@ -439,7 +439,14 @@ elif view == "Time Series View":
             default_min_release = all_release_versions[0]
         st.session_state.min_release = default_min_release
 
+    if 'max_release' not in st.session_state:
+        default_max_release = query_params.get("max_release", all_release_versions[-1])
+        if default_max_release not in all_release_versions:
+            default_max_release = all_release_versions[-1]
+        st.session_state.max_release = default_max_release
+
     selected_min_release = st.session_state.min_release
+    selected_max_release = st.session_state.max_release
 
     # Helper function to convert version strings to tuples for comparison
     def version_tuple(v):
@@ -454,29 +461,19 @@ elif view == "Time Series View":
         st.error("No time series data available")
         st.stop()
 
-    # Filter time series data by selected minimum release
+    # Filter time series data by selected release range
     min_version_tuple = version_tuple(selected_min_release)
-    ts_data = ts_data[ts_data['rhoai_version'].apply(lambda v: version_tuple(v) >= min_version_tuple)]
+    max_version_tuple = version_tuple(selected_max_release)
+    ts_data = ts_data[
+        ts_data['rhoai_version'].apply(lambda v: min_version_tuple <= version_tuple(v) <= max_version_tuple)
+    ]
 
     if ts_data.empty:
-        st.warning(f"No data available for releases >= {selected_min_release}")
+        st.warning(f"No data available for releases {selected_min_release} - {selected_max_release}")
         st.stop()
 
-    # Calculate consistent Y-axis ranges for percentage metrics only
-    # Numeric metrics use automatic scaling due to large magnitude differences
-    percentage_metrics = ['pct_no_fix', 'pct_with_fix', 'pct_fix_version_listed', 'freshness_score']
-
-    if metric_col in percentage_metrics:
-        # Get min/max across all percentage metrics for consistent axis
-        y_min = ts_data[percentage_metrics].min().min()
-        y_max = ts_data[percentage_metrics].max().max()
-    else:
-        # Numeric metrics use automatic Y-axis
-        y_min = None
-        y_max = None
-
-    # Show time series chart (same for all metrics including freshness_score)
-    fig = create_time_series_chart(ts_data, metric_col, selected_metric_label, y_min, y_max)
+    # Show time series chart (Y-axis ranges are handled automatically by the chart function)
+    fig = create_time_series_chart(ts_data, metric_col, selected_metric_label)
     st.plotly_chart(fig, use_container_width=True)
 
     # Add explanation for freshness score
@@ -489,19 +486,22 @@ elif view == "Time Series View":
         )
 
     # Release range slider (below the chart)
-    default_min_index = all_release_versions.index(st.session_state.min_release)
+    default_range = (st.session_state.min_release, st.session_state.max_release)
 
-    def update_min_release():
-        st.session_state.min_release = st.session_state.min_release_slider
-        st.query_params["min_release"] = st.session_state.min_release
+    def update_release_range():
+        new_min, new_max = st.session_state.release_range_slider
+        st.session_state.min_release = new_min
+        st.session_state.max_release = new_max
+        st.query_params["min_release"] = new_min
+        st.query_params["max_release"] = new_max
 
     st.select_slider(
-        "Show releases from:",
+        "Show releases range:",
         options=all_release_versions,
-        value=st.session_state.min_release,
-        help="Select the minimum RHOAI version to display. All releases from this version onwards will be shown.",
-        key="min_release_slider",
-        on_change=update_min_release
+        value=default_range,
+        help="Select the minimum and maximum RHOAI versions to display. Drag the handles to adjust the range.",
+        key="release_range_slider",
+        on_change=update_release_range
     )
 
     # Show data table (only for non-freshness views)

@@ -222,10 +222,17 @@ def create_time_series_chart(df, metric_col: str, metric_label: str, y_min: floa
         ]
     }
 
-    # Set Y-axis range if provided (add 5% margin for readability)
-    if y_min is not None and y_max is not None:
-        margin = (y_max - y_min) * 0.05
-        layout_config['yaxis'] = dict(range=[max(0, y_min - margin), y_max + margin])
+    # Determine Y-axis range based on metric type
+    percentage_metrics = ['pct_no_fix', 'pct_with_fix', 'pct_fix_version_listed', 'freshness_score']
+
+    if metric_col in percentage_metrics:
+        # Percentage metrics: Y-axis from 0 to 100
+        layout_config['yaxis'] = dict(range=[0, 100])
+    else:
+        # Count metrics: Y-axis from 0 to max + 10%
+        data_max = df[metric_col].max()
+        y_axis_max = data_max * 1.1
+        layout_config['yaxis'] = dict(range=[0, y_axis_max])
 
     fig.update_layout(**layout_config)
 
