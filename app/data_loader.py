@@ -55,6 +55,30 @@ def get_min_cvss_score() -> float:
 
 
 @st.cache_data(ttl=300)
+def get_release_dates() -> Dict[str, str]:
+    """
+    Load release dates from rhoai-dates.csv.
+
+    Returns:
+        Dictionary mapping rhoai_version -> release_date (YYYY-MM-DD string)
+    """
+    # Check if running in container or locally
+    if Path("/data").exists():
+        dates_file = Path("/data/releases/rhoai-dates.csv")
+    else:
+        dates_file = Path(__file__).parent.parent / "data" / "releases" / "rhoai-dates.csv"
+
+    if not dates_file.exists():
+        return {}
+
+    try:
+        df = pd.read_csv(dates_file)
+        return dict(zip(df['release'], df['GA-date']))
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=300)
 def get_available_releases() -> List[Tuple[str, str, str]]:
     """
     Scan data/summary directory for RELEASE.tsv files.
@@ -64,7 +88,7 @@ def get_available_releases() -> List[Tuple[str, str, str]]:
 
     Returns:
         List of tuples: [(rhoai_version, ocp_version, filepath), ...]
-        Sorted by RHOAI version (semantic ordering)
+        Sorted chronologically by release date (from rhoai-dates.csv)
     """
     if not DATA_DIR.exists():
         st.error(f"Data directory not found: {DATA_DIR}")
@@ -83,19 +107,26 @@ def get_available_releases() -> List[Tuple[str, str, str]]:
         if rhoai_ver not in releases or ocp_ver > releases[rhoai_ver][0]:
             releases[rhoai_ver] = (ocp_ver, str(filepath))
 
-    # Convert to list and sort by RHOAI version
+    # Convert to list
     result = [(rhoai, ocp, path) for rhoai, (ocp, path) in releases.items()]
-    result.sort(key=lambda x: x[0], reverse=False)  # Will be sorted by sort_versions later
 
-    # Sort by semantic versioning
-    rhoai_versions = [r[0] for r in result]
-    sorted_versions = sort_versions(rhoai_versions)
+    # Load release dates for chronological sorting
+    release_dates = get_release_dates()
 
-    # Rebuild result in sorted order
-    version_to_data = {r[0]: r for r in result}
-    sorted_result = [version_to_data[v] for v in sorted_versions]
+    # Sort by release date (chronologically)
+    # If a version has no date in rhoai-dates.csv, fall back to semantic versioning
+    def sort_key(item):
+        rhoai_ver = item[0]
+        if rhoai_ver in release_dates:
+            return (0, release_dates[rhoai_ver])  # Sort by date first
+        else:
+            # Fallback: put versions without dates at the end, sorted semantically
+            from packaging import version
+            return (1, str(version.parse(rhoai_ver)))
 
-    return sorted_result
+    result.sort(key=sort_key)
+
+    return result
 
 
 @st.cache_data(ttl=300)

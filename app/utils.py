@@ -199,7 +199,7 @@ def create_time_series_chart(df, metric_col: str, metric_label: str, y_min: floa
     # Build layout with optional Y-axis range
     layout_config = {
         'title': f"{metric_label} Over Time",
-        'xaxis_title': "RHOAI Version",
+        'xaxis_title': "RHOAI Version (by release date)",
         'yaxis_title': metric_label,
         'height': 500,
         'hovermode': 'x unified',

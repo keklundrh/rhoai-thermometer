@@ -428,9 +428,9 @@ elif view == "Time Series View":
 
     metric_col = metric_options[selected_metric_label]
 
-    # Release range selector - get all versions first
-    all_release_versions = sorted([rhoai for rhoai, ocp, path in releases],
-                                   key=lambda x: tuple(map(int, x.split('.'))))
+    # Release range selector - get all versions in chronological order
+    # (already sorted by get_available_releases)
+    all_release_versions = [rhoai for rhoai, ocp, path in releases]
 
     # Initialize session state for release range if not present
     if 'min_release' not in st.session_state:
@@ -448,10 +448,6 @@ elif view == "Time Series View":
     selected_min_release = st.session_state.min_release
     selected_max_release = st.session_state.max_release
 
-    # Helper function to convert version strings to tuples for comparison
-    def version_tuple(v):
-        return tuple(map(int, v.split('.')))
-
     # Load time series data (convert list to tuple for caching)
     with st.spinner("Loading time series data..."):
         severity_tuple = tuple(severity_filter) if severity_filter else None
@@ -461,12 +457,14 @@ elif view == "Time Series View":
         st.error("No time series data available")
         st.stop()
 
-    # Filter time series data by selected release range
-    min_version_tuple = version_tuple(selected_min_release)
-    max_version_tuple = version_tuple(selected_max_release)
-    ts_data = ts_data[
-        ts_data['rhoai_version'].apply(lambda v: min_version_tuple <= version_tuple(v) <= max_version_tuple)
-    ]
+    # Filter time series data by selected release range (chronological order)
+    # Find the indices of min and max releases in the chronologically sorted list
+    min_idx = all_release_versions.index(selected_min_release)
+    max_idx = all_release_versions.index(selected_max_release)
+
+    # Keep only versions in the selected range
+    selected_versions = set(all_release_versions[min_idx:max_idx+1])
+    ts_data = ts_data[ts_data['rhoai_version'].isin(selected_versions)]
 
     if ts_data.empty:
         st.warning(f"No data available for releases {selected_min_release} - {selected_max_release}")
