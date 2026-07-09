@@ -142,16 +142,17 @@ def create_severity_chart(severity_counts: dict) -> go.Figure:
     return fig
 
 
-def create_time_series_chart(df, metric_col: str, metric_label: str, y_min: float = None, y_max: float = None) -> go.Figure:
+def create_time_series_chart(df, metric_col: str, metric_label: str, y_min: float = None, y_max: float = None, x_axis_label: str = "RHOAI Version (by release date)") -> go.Figure:
     """
     Create a line chart showing metric evolution over RHOAI versions with a linear trendline.
 
     Args:
-        df: DataFrame with 'rhoai_version' column and metric columns
+        df: DataFrame with 'rhoai_version' column and metric columns (should be pre-sorted)
         metric_col: Column name to plot
         metric_label: Display label for the metric
         y_min: Minimum value for Y-axis (optional, for consistent scaling)
         y_max: Maximum value for Y-axis (optional, for consistent scaling)
+        x_axis_label: Label for the X-axis (reflects the ordering method)
 
     Returns:
         Plotly Figure object
@@ -199,7 +200,7 @@ def create_time_series_chart(df, metric_col: str, metric_label: str, y_min: floa
     # Build layout with optional Y-axis range
     layout_config = {
         'title': f"{metric_label} Over Time",
-        'xaxis_title': "RHOAI Version (by release date)",
+        'xaxis_title': x_axis_label,
         'yaxis_title': metric_label,
         'height': 500,
         'hovermode': 'x unified',

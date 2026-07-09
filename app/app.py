@@ -6,7 +6,7 @@ A Streamlit dashboard for analyzing CVE vulnerabilities in RHOAI container image
 import streamlit as st
 import pandas as pd
 from data_loader import get_available_releases, load_release_data, compute_release_metrics, get_time_series_data, get_min_cvss_score
-from utils import create_severity_chart, create_time_series_chart, create_freshness_chart, create_freshness_score_chart
+from utils import create_severity_chart, create_time_series_chart, create_freshness_chart, create_freshness_score_chart, sort_versions
 
 
 # Page configuration
@@ -111,6 +111,17 @@ current_index = view_options.index(st.session_state.view)
 def update_view():
     st.session_state.view = st.session_state.view_radio
     st.query_params["view"] = st.session_state.view
+    # Reset release range when switching to Time Series View
+    if st.session_state.view == "Time Series View":
+        if 'min_release' in st.session_state:
+            del st.session_state.min_release
+        if 'max_release' in st.session_state:
+            del st.session_state.max_release
+        # Clear query params for release range
+        if "min_release" in st.query_params:
+            del st.query_params["min_release"]
+        if "max_release" in st.query_params:
+            del st.query_params["max_release"]
 
 view = st.sidebar.radio(
     "Select View",
@@ -428,22 +439,61 @@ elif view == "Time Series View":
 
     metric_col = metric_options[selected_metric_label]
 
-    # Release range selector - get all versions in chronological order
-    # (already sorted by get_available_releases)
-    all_release_versions = [rhoai for rhoai, ocp, path in releases]
+    # X-axis ordering selector
+    x_axis_options = {
+        "RHOAI Version (by release date)": "chronological",
+        "RHOAI Version (by version number)": "semantic"
+    }
+
+    # Initialize session state from query params on first load
+    if 'x_axis_order' not in st.session_state:
+        default_x_axis = query_params.get("x_axis_order", list(x_axis_options.keys())[0])
+        if default_x_axis not in x_axis_options:
+            default_x_axis = list(x_axis_options.keys())[0]
+        st.session_state.x_axis_order = default_x_axis
+
+    default_x_axis_index = list(x_axis_options.keys()).index(st.session_state.x_axis_order)
+
+    def update_x_axis_order():
+        st.session_state.x_axis_order = st.session_state.x_axis_order_selector
+        st.query_params["x_axis_order"] = st.session_state.x_axis_order
+
+    selected_x_axis_label = st.radio(
+        "X-Axis Ordering",
+        options=list(x_axis_options.keys()),
+        index=default_x_axis_index,
+        help="Choose how to order RHOAI versions on the X-axis",
+        key="x_axis_order_selector",
+        on_change=update_x_axis_order,
+        horizontal=True
+    )
+
+    x_axis_mode = x_axis_options[selected_x_axis_label]
+
+    # Release range selector - get all versions sorted appropriately
+    # releases is already sorted chronologically by get_available_releases
+    if x_axis_mode == "chronological":
+        all_release_versions = [rhoai for rhoai, ocp, path in releases]
+    else:  # semantic
+        # Sort by semantic version
+        all_release_versions = sort_versions([rhoai for rhoai, ocp, path in releases])
+
+    # Track the previous x_axis_mode to detect changes
+    if 'previous_x_axis_mode' not in st.session_state:
+        st.session_state.previous_x_axis_mode = x_axis_mode
+
+    # If x_axis_mode changed, reset the release range to full
+    if st.session_state.previous_x_axis_mode != x_axis_mode:
+        st.session_state.previous_x_axis_mode = x_axis_mode
+        st.session_state.min_release = all_release_versions[0]
+        st.session_state.max_release = all_release_versions[-1]
 
     # Initialize session state for release range if not present
     if 'min_release' not in st.session_state:
-        default_min_release = query_params.get("min_release", all_release_versions[0])
-        if default_min_release not in all_release_versions:
-            default_min_release = all_release_versions[0]
-        st.session_state.min_release = default_min_release
+        st.session_state.min_release = all_release_versions[0]
 
     if 'max_release' not in st.session_state:
-        default_max_release = query_params.get("max_release", all_release_versions[-1])
-        if default_max_release not in all_release_versions:
-            default_max_release = all_release_versions[-1]
-        st.session_state.max_release = default_max_release
+        st.session_state.max_release = all_release_versions[-1]
 
     selected_min_release = st.session_state.min_release
     selected_max_release = st.session_state.max_release
@@ -471,7 +521,20 @@ elif view == "Time Series View":
         st.stop()
 
     # Show time series chart (Y-axis ranges are handled automatically by the chart function)
-    fig = create_time_series_chart(ts_data, metric_col, selected_metric_label)
+    # Sort the data according to selected x-axis mode
+    if x_axis_mode == "chronological":
+        # Use the chronological order from releases (already sorted)
+        ts_data['sort_key'] = ts_data['rhoai_version'].apply(
+            lambda v: all_release_versions.index(v) if v in all_release_versions else 999
+        )
+    else:  # semantic
+        # Use semantic version sorting
+        from packaging import version
+        ts_data['sort_key'] = ts_data['rhoai_version'].apply(lambda v: str(version.parse(v)))
+
+    ts_data = ts_data.sort_values('sort_key')
+
+    fig = create_time_series_chart(ts_data, metric_col, selected_metric_label, x_axis_label=selected_x_axis_label)
     st.plotly_chart(fig, use_container_width=True)
 
     # Add explanation for freshness score
@@ -484,21 +547,23 @@ elif view == "Time Series View":
         )
 
     # Release range slider (below the chart)
-    default_range = (st.session_state.min_release, st.session_state.max_release)
+    # Always reset to full range when rendering (the user can adjust if needed)
+    default_range = (all_release_versions[0], all_release_versions[-1])
 
     def update_release_range():
-        new_min, new_max = st.session_state.release_range_slider
+        new_min, new_max = st.session_state[f"release_range_slider_{x_axis_mode}"]
         st.session_state.min_release = new_min
         st.session_state.max_release = new_max
         st.query_params["min_release"] = new_min
         st.query_params["max_release"] = new_max
 
+    # Use a key that includes the x_axis_mode so the slider resets when mode changes
     st.select_slider(
         "Show releases range:",
         options=all_release_versions,
         value=default_range,
         help="Select the minimum and maximum RHOAI versions to display. Drag the handles to adjust the range.",
-        key="release_range_slider",
+        key=f"release_range_slider_{x_axis_mode}",
         on_change=update_release_range
     )
 
