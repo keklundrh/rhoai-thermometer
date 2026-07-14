@@ -95,6 +95,13 @@ else:  # Severity
 
 st.sidebar.markdown("---")
 
+# Cache clearing button
+if st.sidebar.button("🔄 Reload Data", help="Clear cache and reload all data files"):
+    st.cache_data.clear()
+    st.rerun()
+
+st.sidebar.markdown("---")
+
 # Sidebar - View selector
 view_options = ["Release View", "Time Series View", "Documentation"]
 
@@ -134,6 +141,9 @@ view = st.sidebar.radio(
 
 # Load available releases
 releases = get_available_releases()
+
+# Debug: Show loaded releases count
+st.sidebar.text(f"Loaded {len(releases)} releases")
 
 if not releases:
     st.error("No RELEASE.tsv files found in data/summary/")
@@ -240,7 +250,7 @@ if view == "Release View":
         st.metric(
             label="Container Freshness Score",
             value=f"{metrics['freshness_score']:.0f}%",
-            help="Percentage of ALL containers built within 3 months of release date. Fresh containers (0-3 months old) have significantly fewer CVEs than stale containers (12+ months old). Note: This metric reflects the full container set, independent of CVE filters and time constraints."
+            help="Percentage of ALL containers built within 1 month of release date. Fresh containers (0-1 month old) have significantly fewer CVEs than stale containers (12+ months old). Note: This metric reflects the full container set, independent of CVE filters and time constraints."
         )
 
     # Row 2: Fix status metrics AT RELEASE TIME
@@ -540,7 +550,7 @@ elif view == "Time Series View":
     # Add explanation for freshness score
     if metric_col == "freshness_score":
         st.info(
-            "📊 **Container Freshness Score:** Percentage of containers built within 3 months of release date. "
+            "📊 **Container Freshness Score:** Percentage of containers built within 1 month of release date. "
             "Freshness reduces CVE accumulation from aging dependencies, but total CVE count also depends on "
             "the security posture of base images at build time. The most effective strategy combines frequent "
             "rebuilds (high freshness) with patched base images."

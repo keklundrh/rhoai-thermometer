@@ -245,7 +245,7 @@ def compute_release_metrics(df: pd.DataFrame, cvss_threshold: float = None, seve
             'freshness_dist': [],
             'freshness_dates': [],
             'freshness_score': 0,
-            'freshness_buckets': {'excellent': 0, 'good': 0, 'fair': 0, 'stale': 0},
+            'freshness_buckets': {'excellent': 0, 'good': 0, 'fair': 0, 'old': 0, 'stale': 0},
             'pct_no_fix': 0,
             'pct_with_fix': 0,
             'cves_with_fix_at_release': 0,
@@ -334,9 +334,10 @@ def compute_release_metrics(df: pd.DataFrame, cvss_threshold: float = None, seve
     # Calculate freshness score buckets (based on container age at release)
     total_aged_containers = len(age_per_container)
     if total_aged_containers > 0:
-        excellent_count = (age_per_container <= 90).sum()   # 0-3 months
-        good_count = ((age_per_container > 90) & (age_per_container <= 180)).sum()   # 3-6 months
-        fair_count = ((age_per_container > 180) & (age_per_container <= 365)).sum()  # 6-12 months
+        excellent_count = (age_per_container <= 30).sum()   # 0-1 month
+        good_count = ((age_per_container > 30) & (age_per_container <= 90)).sum()   # 1-3 months
+        fair_count = ((age_per_container > 90) & (age_per_container <= 180)).sum()  # 3-6 months
+        old_count = ((age_per_container > 180) & (age_per_container <= 365)).sum()  # 6-12 months
         stale_count = (age_per_container > 365).sum()  # 12+ months
 
         freshness_score = (excellent_count / total_aged_containers * 100)
@@ -344,11 +345,12 @@ def compute_release_metrics(df: pd.DataFrame, cvss_threshold: float = None, seve
             'excellent': excellent_count,
             'good': good_count,
             'fair': fair_count,
+            'old': old_count,
             'stale': stale_count
         }
     else:
         freshness_score = 0
-        freshness_buckets = {'excellent': 0, 'good': 0, 'fair': 0, 'stale': 0}
+        freshness_buckets = {'excellent': 0, 'good': 0, 'fair': 0, 'old': 0, 'stale': 0}
 
     # Fix status AT RELEASE TIME
     # NO fix at release = (FIX_DATE > RELEASE_DATE) OR (FIX_DATE == 'NO-RH-VEX') OR (FIX_DATE == 'NOT-FOUND')

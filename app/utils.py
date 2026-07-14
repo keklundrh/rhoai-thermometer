@@ -412,19 +412,20 @@ def create_freshness_score_chart(freshness_buckets: dict) -> go.Figure:
     Create a bar chart showing container age distribution by freshness buckets.
 
     Args:
-        freshness_buckets: Dict with keys 'excellent', 'good', 'fair', 'stale' and container counts
+        freshness_buckets: Dict with keys 'excellent', 'good', 'fair', 'old', 'stale' and container counts
 
     Returns:
         Plotly Figure object
     """
-    categories = ['Excellent\n(0-3mo)', 'Good\n(3-6mo)', 'Fair\n(6-12mo)', 'Stale\n(12+mo)']
+    categories = ['Excellent\n(0-1mo)', 'Good\n(1-3mo)', 'Fair\n(3-6mo)', 'Old\n(6-12mo)', 'Stale\n(12+mo)']
     values = [
         freshness_buckets['excellent'],
         freshness_buckets['good'],
         freshness_buckets['fair'],
+        freshness_buckets['old'],
         freshness_buckets['stale']
     ]
-    colors = ['#00CC66', '#FFD700', '#FFA500', '#FF4444']  # Green, Gold, Orange, Red
+    colors = ['#00CC66', '#9ACD32', '#FFD700', '#FFA500', '#FF4444']  # Green, Yellow-Green, Gold, Orange, Red
 
     fig = go.Figure(data=[
         go.Bar(
