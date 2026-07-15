@@ -35,6 +35,69 @@ The scanning process (`scripts/rh-summarize.sh`) performs the following steps:
 - `podman` - Container image inspection
 - `curl` - API calls to Red Hat VEX and OSV databases
 
+### SBOM Sources: Red Hat vs Syft
+
+This project uses **Syft** to generate SBOMs (Software Bill of Materials) for vulnerability scanning. Red Hat also provides **official signed SBOMs** for their container images. Understanding the differences helps validate scan coverage and accuracy.
+
+**Why Compare SBOMs?**
+- **Validate Coverage** - Ensure Syft finds all packages Red Hat knows about
+- **Check Accuracy** - Verify package versions match between sources
+- **Identify Gaps** - Detect packages unique to either SBOM
+- **Ecosystem Coverage** - Confirm all package types (RPM, Python, Go, etc.) are detected
+
+**Red Hat Official SBOMs:**
+- Signed attestations available via `cosign download attestation`
+- Formats: SPDX or CycloneDX wrapped in in-toto attestation
+- Includes officially supported packages Red Hat tracks for security
+- May focus on direct dependencies rather than transitive ones
+
+**Syft-Generated SBOMs:**
+- Generated on-demand using Syft catalogers
+- Detects packages across multiple ecosystems (RPM, Python, Go, Java, JavaScript, etc.)
+- Often finds transitive dependencies and vendored libraries
+- May include more packages than Red Hat's official SBOM
+
+**Common Differences:**
+
+1. **Package Count**: Syft typically finds 10-30% more packages
+   - Extra packages are often transitive dependencies (Python, Go, npm)
+   - Vendored/bundled libraries detected by Syft
+   - Build-time vs runtime dependency differences
+
+2. **Version String Format**: 
+   - Red Hat: Full RPM NEVRA (e.g., `openssl-3.0.7-28.el9_4`)
+   - Syft: Normalized version (e.g., `openssl-3.0.7`)
+   - This is **normal** and doesn't indicate a mismatch
+
+3. **Coverage by Ecosystem**:
+   - Both cover RPMs well
+   - Syft may have broader Python/Go/JavaScript coverage
+   - Red Hat focuses on officially supported components
+
+**Validation Metrics:**
+
+When comparing SBOMs, track:
+- **Coverage**: Common packages / Red Hat packages (target: >95%)
+- **Version Alignment**: Exact version matches / common packages (target: >90% after normalization)
+- **Syft Excess**: Packages only in Syft SBOM (typically 10-30% of total)
+- **Ecosystem Parity**: Compare package type distributions
+
+**Impact on Scanning:**
+
+Using Syft for vulnerability scanning provides:
+- ✅ **Broader coverage** - Catches CVEs in transitive dependencies
+- ✅ **Consistency** - Same SBOM format across all images
+- ✅ **Flexibility** - Can rescan with updated CVE databases
+- ⚠️ **May include more CVEs** - Some from packages not officially supported by Red Hat
+
+**Tools Available:**
+
+Comparison scripts in `scripts/`:
+- `compare-sboms.sh` - Quick shell-based comparison
+- `compare_sboms.py` - Detailed Python analysis with metrics
+
+See `docs/sbom-comparison.md` for usage examples and detailed comparison methodology.
+
 ### Caching Strategy
 
 To improve performance and reduce redundant work:
