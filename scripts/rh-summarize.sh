@@ -22,15 +22,19 @@ RELS_DIR=data/releases/$1
 IMGS_DIR=data/images
 SUMM_DIR=data/summary
 VEX_DIR=data/vex
-TMP_DIR=/tmp/
 JOBS=8
 CVE_SCORE=${3:-0.0}  # Default to 0.0 (no filtering) to let frontend handle filtering
 VER="$2"
 [[ "$VER" == *.0 ]] && VER="${VER%.0}"
 
 REL_DATE=$(grep -F $2 $RELS_DIR/../rhoai-dates.csv | cut -f2 -d,)
-CUTOFF_FILE=$TMP_DIR/vex-cutoff-30days
-touch -d "30 days ago" $CUTOFF_FILE 2> /dev/null || touch -t $(date -v-30d +%Y%m%d%H%M.%S) $CUTOFF_FILE 2>/dev/null
+CUTOFF_VEX=$TMP_DIR/vex-cutoff-30days
+touch -d "30 days ago" $CUTOFF_VEX 2> /dev/null || touch -t $(date -v-30d +%Y%m%d%H%M.%S) $CUTOFF_VEX 2>/dev/null
+CUTOFF_SCAN=$TMP_DIR/scan-cutoff-7days
+touch -d "7 days ago" $CUTOFF_SCAN 2> /dev/null || touch -t $(date -v-7d +%Y%m%d%H%M.%S) $CUTOFF_SCAN 2>/dev/null
+
+TMP_DIR=/tmp/rh-summarize-ocp-$1-rhoai-$VER-$CVE_SCORE
+mkdir -p $TMP_DIR
 
 # Export variables so available to xargs
 
@@ -41,6 +45,8 @@ export TMP_DIR
 export VEX_DIR
 export RELS_DIR
 export REL_DATE
+export CUTOFF_VEX
+export CUTOFF_SCAN
 
 # Always scan at release date
 SCAN_DATE=$REL_DATE
@@ -75,14 +81,19 @@ fn_scan_sbom () {
     local SBOM_DIR=$WORK_DIR/sboms
     local SCAN_DIR=$WORK_DIR/scans
 
+    RECENT_SCAN=$(find $SCAN_DIR -name "$SHA.grype.*.json" -newer $CUTOFF_SCAN -type f -size +0 2>/dev/null | sort -r | head -1)
+
     # scan image 
     mkdir -p $SCAN_DIR
-    if [ ! -s $SCAN_DIR/$SHA.grype.$(date +%F).json ]; then
+    if [ -s $SCAN_DIR/$SHA.grype.$(date +%F).json ]; then
+        echo "SKIP SCAN: $IMAGE" 
+    elif [ -n "$RECENT_SCAN" ] && [ -s "$RECENT_SCAN" ]; then
+        echo "REUSE SCAN: $IMAGE (using $(basename $RECENT_SCAN))"
+        ln -f $RECENT_SCAN $SCAN_DIR/$SHA.grype.$(date +%F).json
+    else
         cmd="grype sbom:$SBOM_DIR/$SHA.syft.json -o json --quiet > $SCAN_DIR/$SHA.grype.$(date +%F).json"
         echo "RUN SCAN: using $cmd" 
         eval $cmd
-    else
-        echo "SKIP SCAN: $IMAGE" 
     fi
 }
 
@@ -121,13 +132,13 @@ fn_download_vex() {
         CVE_LOW=$(printf '%s' "$CVE" | tr '[:upper:]' '[:lower:]')
 
         mkdir -p $VEX_DIR/$YEAR
-        if [ ! -s $VEX_DIR/$YEAR/$CVE_LOW.json ] || [ $VEX_DIR/$YEAR/$CVE_LOW.json -ot $CUTOFF_FILE ]; then
+        if [ ! -s $VEX_DIR/$YEAR/$CVE_LOW.json ] || [ $VEX_DIR/$YEAR/$CVE_LOW.json -ot $CUTOFF_VEX ]; then
             curl -s -o $VEX_DIR/$YEAR/$CVE_LOW.json $VEX_URL/$YEAR/$CVE_LOW.json
         fi
     elif [[ "$CVE" == GHSA-* ]]; then
         mkdir -p $VEX_DIR/GHSA
 
-        if [ ! -s $VEX_DIR/GHSA/$CVE.json ] || [ $VEX_DIR/GHSA/$CVE.json -ot $CUTOFF_FILE ]; then
+        if [ ! -s $VEX_DIR/GHSA/$CVE.json ] || [ $VEX_DIR/GHSA/$CVE.json -ot $CUTOFF_VEX ]; then
             if ! gh api https://api.github.com/advisories/$CVE > $VEX_DIR/GHSA/$CVE.json 2>/dev/null; then
                 # GHSA not found, write placeholder
                 echo '{"cve_id":"NO-GHSA","ghsa_id":"'$CVE'"}' > $VEX_DIR/GHSA/$CVE.json
@@ -141,14 +152,14 @@ fn_download_vex() {
             CVE_LOW=$(printf '%s' "$CVE_TMP" | tr '[:upper:]' '[:lower:]')
 
             mkdir -p $VEX_DIR/$YEAR
-            if [ ! -s $VEX_DIR/$YEAR/$CVE_LOW.json ] || [ $VEX_DIR/$YEAR/$CVE_LOW.json -ot $CUTOFF_FILE ]; then
+            if [ ! -s $VEX_DIR/$YEAR/$CVE_LOW.json ] || [ $VEX_DIR/$YEAR/$CVE_LOW.json -ot $CUTOFF_VEX ]; then
                 curl -s -o $VEX_DIR/$YEAR/$CVE_LOW.json $VEX_URL/$YEAR/$CVE_LOW.json
             fi
         fi
     elif [[ "$CVE" == GO-* ]]; then
         mkdir -p $VEX_DIR/GO
 
-        if [ ! -s $VEX_DIR/GO/$CVE.json ] || [ $VEX_DIR/GO/$CVE.json -ot $CUTOFF_FILE ]; then
+        if [ ! -s $VEX_DIR/GO/$CVE.json ] || [ $VEX_DIR/GO/$CVE.json -ot $CUTOFF_VEX ]; then
             if ! curl -s -o $VEX_DIR/GO/$CVE.json "https://api.osv.dev/v1/vulns/$CVE" 2>/dev/null; then
                 # GO CVE not found, write placeholder
                 echo '{"id":"NO-GO","go_id":"'$CVE'"}' > $VEX_DIR/GO/$CVE.json
@@ -163,7 +174,7 @@ fn_download_vex() {
             CVE_LOW=$(printf '%s' "$CVE_TMP" | tr '[:upper:]' '[:lower:]')
 
             mkdir -p $VEX_DIR/$YEAR
-            if [ ! -s $VEX_DIR/$YEAR/$CVE_LOW.json ] || [ $VEX_DIR/$YEAR/$CVE_LOW.json -ot $CUTOFF_FILE ]; then
+            if [ ! -s $VEX_DIR/$YEAR/$CVE_LOW.json ] || [ $VEX_DIR/$YEAR/$CVE_LOW.json -ot $CUTOFF_VEX ]; then
                 curl -s -o $VEX_DIR/$YEAR/$CVE_LOW.json $VEX_URL/$YEAR/$CVE_LOW.json
             fi
         fi
